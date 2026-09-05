@@ -3,49 +3,89 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>Sistema de Picks Over 2.5</title>
+  <meta name="theme-color" content="#0f172a">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Metodo Infalible</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <div class="app">
-    <header>
-      <h1>⚽ Picks Over 2.5</h1>
-      <p class="subtitle">Sistema calibrado por liga -- automatico</p>
-    </header>
 
-    <main>
-      <section class="card">
-        <label for="liga-select">Elige la liga</label>
-        <select id="liga-select">
-          <option value="">Cargando ligas...</option>
-        </select>
-        <p id="liga-info" class="info-text"></p>
-      </section>
+    <!-- PANTALLA DE LOGIN -- se muestra sola hasta que el login sea correcto -->
+    <div id="login-screen" class="login-screen">
+      <div class="login-box">
+        <div class="login-logo">
+          <img src="icon-192.png" alt="logo" width="64" height="64">
+        </div>
+        <p class="login-title">Metodo infalible</p>
+        <p class="login-subtitle">Pronosticos over 2.5</p>
 
-      <section class="card">
-        <button id="btn-combo" style="background:#eab308;">🎯 Traeme la combinada del día (cuota ~2.0)</button>
-      </section>
+        <label for="login-email">Correo</label>
+        <input type="email" id="login-email" placeholder="nombre@correo.com" autocomplete="email">
 
-      <div id="combo-resultado"></div>
+        <label for="login-password">Contrasena</label>
+        <input type="password" id="login-password" placeholder="********" autocomplete="current-password">
 
-      <section class="card">
-        <label for="dias-select">Ver partidos de los proximos:</label>
-        <select id="dias-select">
-          <option value="3">3 dias</option>
-          <option value="7">7 dias</option>
-          <option value="14">14 dias</option>
-        </select>
-      </section>
+        <button id="btn-login">Entrar</button>
+        <p id="login-error" class="login-error"></p>
+      </div>
+      <p class="login-footer">Acceso restringido - solo administradores</p>
+    </div>
 
-      <div id="loading" style="display:none;" class="info-text">Consultando partidos y calibrando el motor... puede tardar unos segundos.</div>
-      <div id="resultados"></div>
-    </main>
+    <!-- APP REAL -- oculta hasta que el login sea correcto -->
+    <div id="main-app" style="display:none;">
+      <header>
+        <h1>Metodo infalible</h1>
+        <div class="header-right">
+          <p class="subtitle">Pronosticos over 2.5</p>
+          <button id="btn-logout">Salir</button>
+        </div>
+      </header>
 
-    <footer>
-      <p>Analisis pre-partido -- no garantiza resultados. Gestion de banca es tu responsabilidad.</p>
-    </footer>
+      <main>
+        <section class="card">
+          <label for="liga-select">Elige la liga</label>
+          <select id="liga-select">
+            <option value="">Cargando ligas...</option>
+          </select>
+          <p id="liga-info" class="info-text"></p>
+        </section>
+
+        <section class="card">
+          <button id="btn-combo" style="background:#eab308;">Traeme la combinada del dia (cuota ~2.0)</button>
+        </section>
+
+        <div id="combo-resultado"></div>
+
+        <section class="card">
+          <label for="dias-select">Ver partidos de los proximos:</label>
+          <select id="dias-select">
+            <option value="3">3 dias</option>
+            <option value="7">7 dias</option>
+            <option value="14">14 dias</option>
+          </select>
+        </section>
+
+        <div id="loading" style="display:none;" class="info-text">Consultando partidos...</div>
+        <div id="resultados"></div>
+      </main>
+
+      <footer>
+        <p>Analisis pre-partido -- no garantiza resultados. Gestion de banca es tu responsabilidad.</p>
+      </footer>
+    </div>
+
   </div>
 
   <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js");
+    }
+  </script>
 </body>
 </html>
