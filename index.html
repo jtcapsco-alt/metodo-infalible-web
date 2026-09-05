@@ -48,29 +48,15 @@
 
       <main>
         <section class="card">
-          <label for="liga-select">Elige la liga</label>
-          <select id="liga-select">
-            <option value="">Cargando ligas...</option>
+          <label for="dia-selector">Ver partidos de:</label>
+          <select id="dia-selector">
+            <option value="0">Hoy</option>
+            <option value="1" selected>Mañana</option>
+            <option value="2">Pasado mañana</option>
           </select>
-          <p id="liga-info" class="info-text"></p>
-        </section>
-
-        <section class="card">
-          <button id="btn-combo" style="background:#eab308;">Traeme la combinada del dia (cuota ~2.0)</button>
         </section>
 
         <div id="combo-resultado"></div>
-
-        <section class="card">
-          <label for="dias-select">Ver partidos de los proximos:</label>
-          <select id="dias-select">
-            <option value="3">3 dias</option>
-            <option value="7">7 dias</option>
-            <option value="14">14 dias</option>
-          </select>
-        </section>
-
-        <div id="loading" style="display:none;" class="info-text">Consultando partidos...</div>
         <div id="resultados"></div>
       </main>
 

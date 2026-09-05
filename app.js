@@ -35,7 +35,7 @@ function mostrarLogin() {
 function mostrarApp() {
   loginScreen.style.display = "none";
   mainApp.style.display = "block";
-  cargarLigas();
+  cargarPicks(parseInt(diaSelector.value));
 }
 
 btnLogin.addEventListener("click", async () => {
@@ -69,114 +69,120 @@ btnLogout.addEventListener("click", async () => {
   mostrarLogin();
 });
 
-// permite loguear con Enter en vez de solo click
 loginPassword.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnLogin.click();
 });
 
-// ================== EL RESTO DE LA APP (igual que antes) ==================
-const ligaSelect = document.getElementById("liga-select");
-const ligaInfo = document.getElementById("liga-info");
-const diasSelect = document.getElementById("dias-select");
-const loading = document.getElementById("loading");
+// ================== LEER PICKS DIRECTO DE SUPABASE ==================
 const resultadosDiv = document.getElementById("resultados");
+const comboResultadoDiv = document.getElementById("combo-resultado");
+const diaSelector = document.getElementById("dia-selector");
 
-async function cargarLigas() {
-  try {
-    const resp = await fetch(`${API_URL}/leagues`);
-    const ligas = await resp.json();
-    ligaSelect.innerHTML = '<option value="">Selecciona una liga...</option>';
-    ligas.forEach(liga => {
-      const opt = document.createElement("option");
-      opt.value = liga.league_id;
-      opt.textContent = liga.display_name;
-      opt.dataset.rate = liga.over25_historical_rate;
-      ligaSelect.appendChild(opt);
-    });
-  } catch (err) {
-    ligaSelect.innerHTML = '<option value="">Backend no disponible todavia desde aqui</option>';
-  }
+function hoyISO(offsetDias = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDias);
+  return d.toISOString().split("T")[0];
 }
 
-async function consultarPartidos() {
-  const ligaId = ligaSelect.value;
-  if (!ligaId) { resultadosDiv.innerHTML = ""; return; }
+async function cargarPicks(offsetDias = 0) {
+  resultadosDiv.innerHTML = '<p class="info-text">Cargando...</p>';
+  const fechaObjetivo = hoyISO(offsetDias);
+  const inicio = fechaObjetivo + "T00:00:00";
+  const fin = fechaObjetivo + "T23:59:59";
 
-  const opt = ligaSelect.selectedOptions[0];
-  ligaInfo.textContent = `Over 2.5 historico de esta liga: ${(opt.dataset.rate * 100).toFixed(1)}%`;
+  const { data, error } = await supabaseClient
+    .from("picks")
+    .select("*")
+    .gte("fecha_partido", inicio)
+    .lte("fecha_partido", fin)
+    .order("fecha_partido", { ascending: true });
 
-  const dias = diasSelect.value;
-  loading.style.display = "block";
-  resultadosDiv.innerHTML = "";
-
-  try {
-    const resp = await fetch(`${API_URL}/leagues/${ligaId}/upcoming?days_ahead=${dias}`);
-    const data = await resp.json();
-    if (!resp.ok) {
-      resultadosDiv.innerHTML = `<div class="card resultado nivel-sin-senal"><p>${data.detail || "Error"}</p></div>`;
-      return;
-    }
-    mostrarResultados(data);
-  } catch (err) {
-    resultadosDiv.innerHTML = `<div class="card resultado nivel-sin-senal"><p>Backend no disponible desde aqui todavia.</p></div>`;
-  } finally {
-    loading.style.display = "none";
-  }
-}
-
-function mostrarResultados(data) {
-  if (data.total_analizados === 0) {
-    resultadosDiv.innerHTML = `<div class="card"><p class="info-text">No hay partidos con cuota disponible en este rango.</p></div>`;
+  if (error) {
+    resultadosDiv.innerHTML = `<div class="card resultado nivel-sin-senal"><p>Error leyendo picks: ${error.message}</p></div>`;
     return;
   }
-  const conSenal = data.todos_los_partidos.filter(p => p.califica_como_senal).length;
-  let html = `<div class="card"><p class="info-text"><strong>${conSenal}</strong> de ${data.total_analizados} con señal en ${data.liga}.</p></div>`;
 
-  const ordenados = [...data.todos_los_partidos].sort((a, b) => a.fecha_unix - b.fecha_unix);
-  let diaActual = null;
+  mostrarResultados(data || []);
+  cargarCombinada(fechaObjetivo);
+}
 
-  ordenados.forEach(p => {
-    const fecha = new Date(p.fecha_unix * 1000);
-    const diaKey = fecha.toDateString();
-    if (diaKey !== diaActual) {
-      diaActual = diaKey;
-      html += `<div class="dia-separador">${fecha.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</div>`;
-    }
-    const horaStr = fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
-    const nivelInfo = {
-      CONFIABLE: { clase: "nivel-confiable", texto: "CONFIABLE", badge: "si" },
-      RADAR: { clase: "nivel-radar", texto: "EN EL RADAR", badge: "radar" },
-    }[p.nivel] || { clase: "nivel-sin-senal", texto: "Sin señal", badge: "no" };
+function mostrarResultados(picks) {
+  if (picks.length === 0) {
+    resultadosDiv.innerHTML = `<div class="card"><p class="info-text">Todavia no hay partidos analizados para este dia. El analisis corre una vez al dia -- si acabas de pedirlo, puede que aun no haya corrido.</p></div>`;
+    return;
+  }
 
-    html += `<div class="card resultado ${nivelInfo.clase}">`;
-    html += `<h2>${p.partido}</h2><p class="info-text">${horaStr}</p>`;
-    html += `<span class="badge ${nivelInfo.badge}">${nivelInfo.texto}</span>`;
-    html += `<div class="dato"><span>Probabilidad</span><strong>${(p.p_final * 100).toFixed(1)}%</strong></div>`;
-    html += `<div class="dato"><span>Cuota Over 2.5</span><strong>${p.cuota_over25}</strong></div>`;
-    html += `</div>`;
+  const conSenal = picks.filter(p => p.nivel === "CONFIABLE" || p.nivel === "RADAR").length;
+  let html = `<div class="card"><p class="info-text"><strong>${conSenal}</strong> de ${picks.length} partidos con señal.</p></div>`;
+
+  // Agrupar por liga
+  const porLiga = {};
+  picks.forEach(p => {
+    if (!porLiga[p.liga_nombre]) porLiga[p.liga_nombre] = [];
+    porLiga[p.liga_nombre].push(p);
   });
+
+  Object.keys(porLiga).sort().forEach(liga => {
+    const partidosLiga = porLiga[liga];
+    html += `<div class="liga-separador">${liga}</div>`;
+
+    partidosLiga.forEach(p => {
+      const fecha = new Date(p.fecha_partido);
+      const horaStr = fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+      const nivelInfo = {
+        CONFIABLE: { clase: "nivel-confiable", texto: "CONFIABLE", badge: "si" },
+        RADAR: { clase: "nivel-radar", texto: "EN EL RADAR", badge: "radar" },
+      }[p.nivel] || { clase: "nivel-sin-senal", texto: "Sin señal", badge: "no" };
+
+      html += `<div class="card resultado ${nivelInfo.clase}">`;
+      html += `<h2>${p.partido}</h2><p class="info-text">${horaStr}</p>`;
+      html += `<span class="badge ${nivelInfo.badge}">${nivelInfo.texto}</span>`;
+      html += `<div class="dato"><span>Probabilidad</span><strong>${(p.probabilidad * 100).toFixed(1)}%</strong></div>`;
+      html += `<div class="dato"><span>Cuota Over 2.5</span><strong>${p.cuota}</strong></div>`;
+      if (p.regla_pct) {
+        html += `<div class="dato"><span>Historico (${p.regla_tipo})</span><strong>${p.regla_pct}%</strong></div>`;
+      }
+      html += `</div>`;
+    });
+  });
+
   resultadosDiv.innerHTML = html;
 }
 
-ligaSelect.addEventListener("change", consultarPartidos);
-diasSelect.addEventListener("change", consultarPartidos);
+async function cargarCombinada(fecha) {
+  const { data, error } = await supabaseClient
+    .from("combinada_dia")
+    .select("*")
+    .eq("fecha", fecha)
+    .maybeSingle();
 
-document.getElementById("btn-combo").addEventListener("click", async () => {
-  const btn = document.getElementById("btn-combo");
-  const div = document.getElementById("combo-resultado");
-  btn.textContent = "Analizando...";
-  btn.disabled = true;
-  div.innerHTML = "";
-  try {
-    const resp = await fetch(`${API_URL}/combo-del-dia?days_ahead=2`);
-    const data = await resp.json();
-    div.innerHTML = `<div class="card"><p class="info-text">${JSON.stringify(data).slice(0, 200)}...</p></div>`;
-  } catch (err) {
-    div.innerHTML = `<div class="card"><p class="info-text">Backend no disponible desde aqui todavia.</p></div>`;
-  } finally {
-    btn.textContent = "Traeme la combinada del dia (cuota ~2.0)";
-    btn.disabled = false;
+  if (error || !data) {
+    comboResultadoDiv.innerHTML = "";
+    return;
   }
+
+  if (data.mensaje) {
+    comboResultadoDiv.innerHTML = `<div class="card"><p class="info-text">${data.mensaje}</p></div>`;
+    return;
+  }
+
+  let html = `<div class="card resultado nivel-confiable">`;
+  html += `<h2>Combinada recomendada</h2>`;
+  html += `<div class="dato"><span>Cuota total</span><strong>${data.cuota_total}</strong></div>`;
+  if (data.probabilidad_estimada) {
+    html += `<div class="dato"><span>Probabilidad estimada</span><strong>${data.probabilidad_estimada}%</strong></div>`;
+  }
+  (data.picks || []).forEach(p => {
+    html += `<hr style="border-color:#334155;margin:10px 0;">`;
+    html += `<p><strong>${p.partido}</strong> (${p.liga})</p>`;
+    html += `<div class="dato"><span>Cuota Over 2.5</span><strong>${p.cuota_over25}</strong></div>`;
+  });
+  html += `</div>`;
+  comboResultadoDiv.innerHTML = html;
+}
+
+diaSelector.addEventListener("change", () => {
+  cargarPicks(parseInt(diaSelector.value));
 });
 
 // ================== ARRANQUE ==================
