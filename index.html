@@ -7,16 +7,29 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Metodo Infalible</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <div class="app">
 
-    <!-- PANTALLA DE LOGIN -- se muestra sola hasta que el login sea correcto -->
-    <div id="login-screen" class="login-screen">
+    <!-- SPLASH -- se muestra primero, siempre, unos segundos -->
+    <div id="splash-screen" class="splash-screen">
+      <img id="splash-logo" src="icon-192.png" alt="logo" class="splash-logo">
+      <p id="splash-title" class="splash-title">Metodo infalible</p>
+      <p id="splash-subtitle" class="splash-subtitle">Pronosticos over 2.5</p>
+      <div id="splash-bar-track" class="splash-bar-track">
+        <div id="splash-bar-fill" class="splash-bar-fill"></div>
+      </div>
+      <p class="creador">Diseñado y creado por Jose Torres</p>
+    </div>
+
+    <!-- LOGIN -- oculta hasta que termine el splash -->
+    <div id="login-screen" class="login-screen" style="display:none;">
       <div class="login-box">
         <div class="login-logo">
           <img src="icon-192.png" alt="logo" width="64" height="64">
@@ -34,34 +47,35 @@
         <p id="login-error" class="login-error"></p>
       </div>
       <p class="login-footer">Acceso restringido - solo administradores</p>
+      <p class="creador">Diseñado y creado por Jose Torres</p>
     </div>
 
-    <!-- APP REAL -- oculta hasta que el login sea correcto -->
+    <!-- APP -- oculta hasta login correcto -->
     <div id="main-app" style="display:none;">
       <header>
-        <h1>Metodo infalible</h1>
-        <div class="header-right">
-          <p class="subtitle">Pronosticos over 2.5</p>
-          <button id="btn-logout">Salir</button>
+        <div class="header-left">
+          <img src="icon-192.png" alt="logo" class="header-logo">
+          <div>
+            <p class="header-title">Metodo infalible</p>
+          </div>
         </div>
+        <i id="btn-logout" class="ti ti-logout" aria-label="Salir"></i>
       </header>
 
-      <main>
-        <section class="card">
-          <label for="dia-selector">Ver partidos de:</label>
-          <select id="dia-selector">
-            <option value="0">Hoy</option>
-            <option value="1" selected>Mañana</option>
-            <option value="2">Pasado mañana</option>
-          </select>
-        </section>
+      <div class="tabs">
+        <div class="tab tab-activo" data-dia="0">Hoy</div>
+        <div class="tab" data-dia="1">Mañana</div>
+        <div class="tab" data-dia="2">Pasado</div>
+      </div>
 
+      <main>
         <div id="combo-resultado"></div>
         <div id="resultados"></div>
       </main>
 
       <footer>
         <p>Analisis pre-partido -- no garantiza resultados. Gestion de banca es tu responsabilidad.</p>
+        <p class="creador">Diseñado y creado por Jose Torres</p>
       </footer>
     </div>
 
