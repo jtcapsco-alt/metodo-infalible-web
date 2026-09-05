@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Sistema de Picks Over 2.5</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>⚽ Picks Over 2.5</h1>
+      <p class="subtitle">Sistema calibrado por liga -- automatico</p>
+    </header>
+
+    <main>
+      <section class="card">
+        <label for="liga-select">Elige la liga</label>
+        <select id="liga-select">
+          <option value="">Cargando ligas...</option>
+        </select>
+        <p id="liga-info" class="info-text"></p>
+      </section>
+
+      <section class="card">
+        <button id="btn-combo" style="background:#eab308;">🎯 Traeme la combinada del día (cuota ~2.0)</button>
+      </section>
+
+      <div id="combo-resultado"></div>
+
+      <section class="card">
+        <label for="dias-select">Ver partidos de los proximos:</label>
+        <select id="dias-select">
+          <option value="3">3 dias</option>
+          <option value="7">7 dias</option>
+          <option value="14">14 dias</option>
+        </select>
+      </section>
+
+      <div id="loading" style="display:none;" class="info-text">Consultando partidos y calibrando el motor... puede tardar unos segundos.</div>
+      <div id="resultados"></div>
+    </main>
+
+    <footer>
+      <p>Analisis pre-partido -- no garantiza resultados. Gestion de banca es tu responsabilidad.</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
