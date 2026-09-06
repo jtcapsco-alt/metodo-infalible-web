@@ -2,8 +2,8 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #0a0f1a;
-  color: #e2e8f0;
+  background: #f8fafc;
+  color: #0f172a;
   min-height: 100vh;
 }
 
@@ -15,12 +15,7 @@ body {
   flex-direction: column;
 }
 
-.creador {
-  font-size: 10px;
-  color: #94a3b8;
-  text-align: center;
-  margin-top: 6px;
-}
+.creador { font-size: 10px; color: #94a3b8; text-align: center; margin-top: 6px; }
 
 /* ---- SPLASH ---- */
 .splash-screen {
@@ -33,33 +28,15 @@ body {
   padding: 20px;
 }
 
-.splash-logo {
-  width: 220px;
-  object-fit: contain;
-  opacity: 0;
-  animation: splashLogoAparece 2.2s ease-out forwards;
-}
+.splash-logo { width: 220px; object-fit: contain; opacity: 0; animation: splashLogoAparece 2.2s ease-out forwards; }
 
 .splash-bar-track {
-  width: 160px;
-  height: 3px;
-  background: #e2e8f0;
-  border-radius: 2px;
-  overflow: hidden;
-  margin-top: 30px;
-  opacity: 0;
-  animation: splashTextoAparece 0.6s ease-out 2.4s forwards;
+  width: 160px; height: 3px; background: #e2e8f0; border-radius: 2px; overflow: hidden;
+  margin-top: 30px; opacity: 0; animation: splashTextoAparece 0.6s ease-out 2.4s forwards;
 }
 
-.splash-bar-fill {
-  width: 0%;
-  height: 100%;
-  background: #22c55e;
-  border-radius: 2px;
-  animation: splashCargar 2.8s ease-in-out 2.6s forwards;
-}
-
-.splash-screen .creador { color: #94a3b8; margin-top: 20px; }
+.splash-bar-fill { width: 0%; height: 100%; background: #22c55e; border-radius: 2px; animation: splashCargar 2.8s ease-in-out 2.6s forwards; }
+.splash-screen .creador { margin-top: 20px; }
 
 @keyframes splashLogoAparece { 0% { opacity: 0; transform: scale(0.85); } 100% { opacity: 1; transform: scale(1); } }
 @keyframes splashTextoAparece { 0% { opacity: 0; } 100% { opacity: 1; } }
@@ -67,172 +44,103 @@ body {
 
 /* ---- LOGIN ---- */
 .login-screen {
-  min-height: 100vh;
-  background: #ffffff;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  padding: 20px;
+  min-height: 100vh; background: #ffffff; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px; padding: 20px;
 }
 
 .login-box {
-  width: 100%;
-  max-width: 320px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 28px 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
+  width: 100%; max-width: 320px; background: #ffffff; border: 1px solid #e2e8f0;
+  border-radius: 16px; padding: 28px 24px; display: flex; flex-direction: column;
+  align-items: center; text-align: center;
 }
 
 .login-logo-img { width: 160px; margin-bottom: 16px; }
 
-.login-box label {
-  width: 100%;
-  text-align: left;
-  font-size: 12px;
-  color: #64748b;
-  margin: 10px 0 4px;
-}
+.login-box label { width: 100%; text-align: left; font-size: 12px; color: #64748b; margin: 10px 0 4px; }
 
 .login-box input {
-  width: 100%;
-  padding: 11px 12px;
-  border-radius: 8px;
-  border: 1px solid #cbd5e1;
-  background: #f8fafc;
-  color: #0f172a;
-  font-size: 15px;
+  width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid #cbd5e1;
+  background: #f8fafc; color: #0f172a; font-size: 15px;
 }
 
 .login-box input:focus { outline: none; border-color: #22c55e; }
 
 #btn-login {
-  width: 100%;
-  padding: 12px;
-  border-radius: 8px;
-  border: none;
-  background: #22c55e;
-  color: #062712;
-  font-size: 14px;
-  font-weight: 600;
-  margin-top: 18px;
-  cursor: pointer;
+  width: 100%; padding: 12px; border-radius: 8px; border: none; background: #22c55e;
+  color: #062712; font-size: 14px; font-weight: 600; margin-top: 18px; cursor: pointer;
 }
 
 #btn-login:disabled { opacity: 0.6; }
-
 .login-error { color: #dc2626; font-size: 12px; margin-top: 10px; min-height: 14px; }
 .login-footer { font-size: 11px; color: #94a3b8; }
 
 /* ---- HEADER ---- */
 header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px; background: #ffffff; border-bottom: 1px solid #e2e8f0;
 }
 
 .header-left { display: flex; align-items: center; gap: 10px; }
 .header-logo { width: 32px; height: 32px; border-radius: 50%; }
-.header-title { font-size: 15px; font-weight: 500; color: #f1f5f9; }
-
-#btn-logout {
-  color: #64748b;
-  font-size: 18px;
-  cursor: pointer;
-}
+.header-title { font-size: 15px; font-weight: 600; color: #0f172a; }
+#btn-logout { color: #94a3b8; font-size: 18px; cursor: pointer; }
 
 /* ---- TABS ---- */
-.tabs {
-  display: flex;
-  gap: 6px;
-  padding: 0 16px 14px;
-}
+.tabs { display: flex; gap: 6px; padding: 14px 16px; background: #ffffff; }
 
 .tab {
-  flex: 1;
-  text-align: center;
-  background: #111a29;
-  color: #94a3b8;
-  font-size: 12px;
-  padding: 8px 0;
-  border-radius: 8px;
-  cursor: pointer;
+  flex: 1; text-align: center; background: #f1f5f9; color: #64748b;
+  font-size: 13px; font-weight: 500; padding: 9px 0; border-radius: 8px; cursor: pointer;
 }
 
-.tab-activo { background: #22c55e; color: #062712; font-weight: 500; }
+.tab-activo { background: #22c55e; color: #062712; }
 
 /* ---- MAIN CONTENT ---- */
-main { flex: 1; padding: 0 16px; }
+main { flex: 1; padding: 12px 16px; }
 
 .info-card {
-  background: #111a29;
-  border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
-  font-size: 12px;
-  color: #94a3b8;
+  background: #f1f5f9; border-radius: 10px; padding: 12px; margin-bottom: 14px;
+  font-size: 13px; color: #475569;
 }
 
 .combo-card {
-  background: #111a29;
-  border: 1px solid #22c55e;
-  border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 14px;
+  background: #f0fdf4; border: 2px solid #22c55e; border-radius: 14px;
+  padding: 16px; margin-bottom: 18px;
 }
 
-.combo-card p.combo-titulo { color: #4ade80; font-size: 12px; font-weight: 500; margin-bottom: 3px; }
-.combo-card p.combo-detalle { color: #64748b; font-size: 11px; }
+.combo-card p.combo-titulo { color: #15803d; font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.combo-card p.combo-detalle { color: #475569; font-size: 12px; }
 
 .liga-nombre {
-  color: #475569;
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 14px 0 6px;
+  color: #64748b; font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; margin: 18px 0 10px;
 }
 
-.fila-partido {
-  display: flex;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid #1e293b;
+.partido-card {
+  background: #ffffff; border-radius: 14px; padding: 16px; margin-bottom: 12px;
+  border: 1px solid #e2e8f0; border-left: 4px solid #cbd5e1;
 }
 
-.fila-partido:last-child { border-bottom: none; }
+.partido-card.borde-confiable { border-left-color: #22c55e; }
+.partido-card.borde-radar { border-left-color: #eab308; }
+.partido-card.borde-ninguno { border-left-color: #cbd5e1; }
 
-.barra-nivel {
-  width: 6px;
-  height: 32px;
-  border-radius: 3px;
-  margin-right: 10px;
-  flex-shrink: 0;
+.partido-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.partido-nombre { font-size: 15px; font-weight: 600; color: #0f172a; }
+.partido-hora { font-size: 12px; color: #94a3b8; margin: 4px 0 12px; }
+
+.pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px; white-space: nowrap; }
+.pill-confiable { background: #dcfce7; color: #15803d; }
+.pill-radar { background: #fef9c3; color: #a16207; }
+.pill-ninguno { background: #f1f5f9; color: #94a3b8; }
+
+.partido-dato {
+  display: flex; justify-content: space-between; padding: 8px 0;
+  border-top: 1px solid #f1f5f9; font-size: 13px; color: #64748b;
 }
 
-.barra-confiable { background: #22c55e; }
-.barra-radar { background: #eab308; }
-.barra-ninguno { background: #334155; }
+.partido-dato strong { color: #0f172a; }
+.cuota-confiable { color: #15803d !important; }
+.cuota-radar { color: #a16207 !important; }
 
-.fila-info { flex: 1; min-width: 0; }
-.fila-partido-nombre { color: #f1f5f9; font-size: 12px; font-weight: 500; margin: 0; }
-.fila-detalle { color: #64748b; font-size: 10px; margin: 2px 0 0; }
-
-.fila-cuota { font-size: 13px; font-weight: 500; flex-shrink: 0; margin-left: 8px; }
-.cuota-confiable { color: #22c55e; }
-.cuota-radar { color: #eab308; }
-.cuota-ninguno { color: #94a3b8; }
-
-footer {
-  text-align: center;
-  padding: 16px;
-  font-size: 10px;
-  color: #64748b;
-}
+footer { text-align: center; padding: 16px; font-size: 10px; color: #94a3b8; background: #ffffff; border-top: 1px solid #e2e8f0; }

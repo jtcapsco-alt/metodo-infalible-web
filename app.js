@@ -124,9 +124,9 @@ async function cargarPicks(offsetDias = 0) {
 }
 
 function nivelClases(nivel) {
-  if (nivel === "CONFIABLE") return { barra: "barra-confiable", cuota: "cuota-confiable", texto: "Confiable" };
-  if (nivel === "RADAR") return { barra: "barra-radar", cuota: "cuota-radar", texto: "En el radar" };
-  return { barra: "barra-ninguno", cuota: "cuota-ninguno", texto: "Sin señal" };
+  if (nivel === "CONFIABLE") return { borde: "borde-confiable", pill: "pill-confiable", cuota: "cuota-confiable", texto: "Confiable" };
+  if (nivel === "RADAR") return { borde: "borde-radar", pill: "pill-radar", cuota: "cuota-radar", texto: "En el radar" };
+  return { borde: "borde-ninguno", pill: "pill-ninguno", cuota: "cuota-ninguno", texto: "Sin señal" };
 }
 
 function mostrarResultados(picks) {
@@ -150,12 +150,18 @@ function mostrarResultados(picks) {
       const fecha = new Date(p.fecha_partido);
       const horaStr = fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
       const nc = nivelClases(p.nivel);
-      const detalle = p.regla_pct ? `${nc.texto} -- ${p.regla_pct}%` : `${nc.texto} -- ${horaStr}`;
 
-      html += `<div class="fila-partido">`;
-      html += `<div class="barra-nivel ${nc.barra}"></div>`;
-      html += `<div class="fila-info"><p class="fila-partido-nombre">${p.partido}</p><p class="fila-detalle">${detalle}</p></div>`;
-      html += `<span class="fila-cuota ${nc.cuota}">${p.cuota}</span>`;
+      html += `<div class="partido-card ${nc.borde}">`;
+      html += `<div class="partido-card-top">`;
+      html += `<h3 class="partido-nombre">${p.partido}</h3>`;
+      html += `<span class="pill ${nc.pill}">${nc.texto}</span>`;
+      html += `</div>`;
+      html += `<p class="partido-hora">${horaStr}</p>`;
+      html += `<div class="partido-dato"><span>Probabilidad</span><strong>${(p.probabilidad * 100).toFixed(1)}%</strong></div>`;
+      html += `<div class="partido-dato"><span>Cuota Over 2.5</span><strong class="${nc.cuota}">${p.cuota}</strong></div>`;
+      if (p.regla_pct) {
+        html += `<div class="partido-dato"><span>Historico (${p.regla_tipo})</span><strong>${p.regla_pct}%</strong></div>`;
+      }
       html += `</div>`;
     });
   });
