@@ -17,7 +17,7 @@ body {
 
 .creador {
   font-size: 10px;
-  color: #334155;
+  color: #94a3b8;
   text-align: center;
   margin-top: 6px;
 }
@@ -25,6 +25,7 @@ body {
 /* ---- SPLASH ---- */
 .splash-screen {
   min-height: 100vh;
+  background: #ffffff;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -33,39 +34,21 @@ body {
 }
 
 .splash-logo {
-  width: 88px;
-  height: 88px;
+  width: 220px;
   object-fit: contain;
   opacity: 0;
   animation: splashLogoAparece 2.2s ease-out forwards;
 }
 
-.splash-title {
-  font-size: 17px;
-  font-weight: 500;
-  color: #f1f5f9;
-  margin-top: 20px;
-  opacity: 0;
-  animation: splashTextoAparece 1s ease-out 2.2s forwards;
-}
-
-.splash-subtitle {
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 4px;
-  margin-bottom: 30px;
-  opacity: 0;
-  animation: splashTextoAparece 1s ease-out 2.2s forwards;
-}
-
 .splash-bar-track {
   width: 160px;
   height: 3px;
-  background: #1e293b;
+  background: #e2e8f0;
   border-radius: 2px;
   overflow: hidden;
+  margin-top: 30px;
   opacity: 0;
-  animation: splashTextoAparece 0.6s ease-out 3s forwards;
+  animation: splashTextoAparece 0.6s ease-out 2.4s forwards;
 }
 
 .splash-bar-fill {
@@ -73,16 +56,19 @@ body {
   height: 100%;
   background: #22c55e;
   border-radius: 2px;
-  animation: splashCargar 2.8s ease-in-out 3.2s forwards;
+  animation: splashCargar 2.8s ease-in-out 2.6s forwards;
 }
 
-@keyframes splashLogoAparece { 0% { opacity: 0; transform: scale(0.7); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes splashTextoAparece { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+.splash-screen .creador { color: #94a3b8; margin-top: 20px; }
+
+@keyframes splashLogoAparece { 0% { opacity: 0; transform: scale(0.85); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes splashTextoAparece { 0% { opacity: 0; } 100% { opacity: 1; } }
 @keyframes splashCargar { 0% { width: 0%; } 100% { width: 100%; } }
 
 /* ---- LOGIN ---- */
 .login-screen {
   min-height: 100vh;
+  background: #ffffff;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -94,7 +80,8 @@ body {
 .login-box {
   width: 100%;
   max-width: 320px;
-  background: #111a29;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 16px;
   padding: 28px 24px;
   display: flex;
@@ -103,15 +90,13 @@ body {
   text-align: center;
 }
 
-.login-logo img { border-radius: 50%; margin-bottom: 10px; }
-.login-title { font-size: 17px; font-weight: 500; color: #f1f5f9; }
-.login-subtitle { font-size: 12px; color: #64748b; margin-bottom: 20px; }
+.login-logo-img { width: 160px; margin-bottom: 16px; }
 
 .login-box label {
   width: 100%;
   text-align: left;
   font-size: 12px;
-  color: #94a3b8;
+  color: #64748b;
   margin: 10px 0 4px;
 }
 
@@ -119,9 +104,9 @@ body {
   width: 100%;
   padding: 11px 12px;
   border-radius: 8px;
-  border: 1px solid #1e293b;
-  background: #0a0f1a;
-  color: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
   font-size: 15px;
 }
 
@@ -142,8 +127,8 @@ body {
 
 #btn-login:disabled { opacity: 0.6; }
 
-.login-error { color: #f87171; font-size: 12px; margin-top: 10px; min-height: 14px; }
-.login-footer { font-size: 11px; color: #475569; }
+.login-error { color: #dc2626; font-size: 12px; margin-top: 10px; min-height: 14px; }
+.login-footer { font-size: 11px; color: #94a3b8; }
 
 /* ---- HEADER ---- */
 header {
