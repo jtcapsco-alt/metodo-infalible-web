@@ -2,7 +2,11 @@
 const SUPABASE_URL = "https://punuuirjrtnihcgjucji.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1bnV1aXJqcnRuaWhjZ2p1Y2ppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MzY0OTIsImV4cCI6MjEwNDIxMjQ5Mn0.05iGLyekYZO0Y8wLkKQlnL1rOjlWYBrPpo5sM7QQrPU";
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: false, // no recordar la sesion al cerrar la app -- pide login cada vez que se abre
+  },
+});
 
 // ================== ELEMENTOS ==================
 const splashScreen = document.getElementById("splash-screen");
@@ -46,6 +50,7 @@ function mostrarApp() {
   loginScreen.style.display = "none";
   mainApp.style.display = "block";
   cargarPicks(diaActivo);
+  reiniciarTemporizadorInactividad();
 }
 
 btnLogin.addEventListener("click", async () => {
@@ -81,6 +86,24 @@ btnLogout.addEventListener("click", async () => {
 
 loginPassword.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnLogin.click();
+});
+
+// ================== CIERRE AUTOMATICO POR INACTIVIDAD ==================
+const MINUTOS_INACTIVIDAD = 30;
+let temporizadorInactividad = null;
+
+function reiniciarTemporizadorInactividad() {
+  if (mainApp.style.display === "none") return; // no aplica si no ha logueado
+  clearTimeout(temporizadorInactividad);
+  temporizadorInactividad = setTimeout(async () => {
+    await supabaseClient.auth.signOut();
+    mostrarLogin();
+    loginError.textContent = "Sesion cerrada por inactividad.";
+  }, MINUTOS_INACTIVIDAD * 60 * 1000);
+}
+
+["click", "keydown", "touchstart", "scroll"].forEach(evento => {
+  document.addEventListener(evento, reiniciarTemporizadorInactividad);
 });
 
 // ================== BOTON ANALIZAR AHORA ==================
