@@ -83,6 +83,28 @@ loginPassword.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnLogin.click();
 });
 
+// ================== BOTON ANALIZAR AHORA ==================
+const btnAnalizar = document.getElementById("btn-analizar");
+const analizarMensaje = document.getElementById("analizar-mensaje");
+
+btnAnalizar.addEventListener("click", async () => {
+  btnAnalizar.disabled = true;
+  btnAnalizar.textContent = "Iniciando...";
+  analizarMensaje.textContent = "";
+
+  const { data, error } = await supabaseClient.functions.invoke("run-analysis");
+
+  btnAnalizar.disabled = false;
+  btnAnalizar.textContent = "Analizar ahora";
+
+  if (error || (data && data.ok === false)) {
+    analizarMensaje.textContent = "Error al iniciar. Intenta de nuevo.";
+    return;
+  }
+
+  analizarMensaje.textContent = "Análisis en curso — tarda unos minutos. Vuelve a entrar en un rato.";
+});
+
 // ================== TABS DE DIA ==================
 tabs.forEach(tab => {
   tab.addEventListener("click", () => {
@@ -125,6 +147,7 @@ async function cargarPicks(offsetDias = 0) {
 
 function nivelClases(nivel) {
   if (nivel === "CONFIABLE") return { borde: "borde-confiable", pill: "pill-confiable", cuota: "cuota-confiable", texto: "Confiable" };
+  if (nivel === "RADAR_ALTO") return { borde: "borde-radar-alto", pill: "pill-radar-alto", cuota: "cuota-radar-alto", texto: "Alto (poca muestra)" };
   if (nivel === "RADAR") return { borde: "borde-radar", pill: "pill-radar", cuota: "cuota-radar", texto: "En el radar" };
   return { borde: "borde-ninguno", pill: "pill-ninguno", cuota: "cuota-ninguno", texto: "Sin señal" };
 }
