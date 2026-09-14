@@ -128,15 +128,96 @@ btnAnalizar.addEventListener("click", async () => {
   analizarMensaje.textContent = "Análisis en curso — tarda unos minutos. Vuelve a entrar en un rato.";
 });
 
-// ================== TABS DE DIA ==================
+// ================== TABS ==================
 tabs.forEach(tab => {
   tab.addEventListener("click", () => {
     tabs.forEach(t => t.classList.remove("tab-activo"));
     tab.classList.add("tab-activo");
-    diaActivo = parseInt(tab.dataset.dia);
-    cargarPicks(diaActivo);
+
+    if (tab.dataset.vista === "stats") {
+      cargarEstadisticas();
+    } else {
+      diaActivo = parseInt(tab.dataset.dia);
+      cargarPicks(diaActivo);
+    }
   });
 });
+
+// ================== ESTADISTICAS ==================
+async function cargarEstadisticas() {
+  comboResultadoDiv.innerHTML = "";
+  resultadosDiv.innerHTML = `<div class="info-card">Cargando estadisticas...</div>`;
+
+  const { data, error } = await supabaseClient
+    .from("picks")
+    .select("liga_nombre, nivel, resultado")
+    .not("resultado", "is", null);
+
+  if (error) {
+    resultadosDiv.innerHTML = `<div class="info-card">Error: ${error.message}</div>`;
+    return;
+  }
+
+  if (!data || data.length === 0) {
+    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay picks verificados. Esto se va llenando solo, dia a dia, a medida que se juegan los partidos.</div>`;
+    return;
+  }
+
+  mostrarEstadisticas(data);
+}
+
+function resumenAcierto(filas) {
+  const total = filas.length;
+  const aciertos = filas.filter(f => f.resultado === true).length;
+  const pct = total > 0 ? (100 * aciertos / total).toFixed(1) : "0.0";
+  return { total, aciertos, fallos: total - aciertos, pct };
+}
+
+function mostrarEstadisticas(filas) {
+  let html = "";
+
+  // resumen general
+  const general = resumenAcierto(filas);
+  html += `<div class="stats-card stats-general">
+    <p class="stats-titulo">Resumen general</p>
+    <p class="stats-numero">${general.pct}%</p>
+    <p class="stats-detalle">${general.aciertos} aciertos de ${general.total} picks verificados (${general.fallos} fallos)</p>
+  </div>`;
+
+  // por nivel
+  html += `<p class="liga-nombre">Por nivel de confianza</p>`;
+  const nivelesOrden = ["CONFIABLE", "RADAR_ALTO", "RADAR"];
+  const nivelesTexto = { CONFIABLE: "Confiable", RADAR_ALTO: "Alto (poca muestra)", RADAR: "En el radar" };
+  nivelesOrden.forEach(niv => {
+    const filasNivel = filas.filter(f => f.nivel === niv);
+    if (filasNivel.length === 0) return;
+    const r = resumenAcierto(filasNivel);
+    const nc = nivelClases(niv);
+    html += `<div class="stats-fila">
+      <span class="pill ${nc.pill}">${nivelesTexto[niv]}</span>
+      <span class="stats-fila-numero">${r.pct}%</span>
+      <span class="stats-fila-detalle">${r.aciertos}/${r.total}</span>
+    </div>`;
+  });
+
+  // por liga
+  html += `<p class="liga-nombre">Por liga</p>`;
+  const porLiga = {};
+  filas.forEach(f => {
+    if (!porLiga[f.liga_nombre]) porLiga[f.liga_nombre] = [];
+    porLiga[f.liga_nombre].push(f);
+  });
+  Object.keys(porLiga).sort().forEach(liga => {
+    const r = resumenAcierto(porLiga[liga]);
+    html += `<div class="stats-fila">
+      <span class="stats-fila-liga">${liga}</span>
+      <span class="stats-fila-numero">${r.pct}%</span>
+      <span class="stats-fila-detalle">${r.aciertos}/${r.total}</span>
+    </div>`;
+  });
+
+  resultadosDiv.innerHTML = html;
+}
 
 // ================== LEER PICKS DE SUPABASE ==================
 function hoyISO(offsetDias = 0) {
