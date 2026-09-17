@@ -110,22 +110,60 @@ function reiniciarTemporizadorInactividad() {
 const btnAnalizar = document.getElementById("btn-analizar");
 const analizarMensaje = document.getElementById("analizar-mensaje");
 
+let pollingAnalisis = null;
+
 btnAnalizar.addEventListener("click", async () => {
+  if (pollingAnalisis) clearInterval(pollingAnalisis); // por si le da doble clic
+
   btnAnalizar.disabled = true;
   btnAnalizar.textContent = "Iniciando...";
   analizarMensaje.textContent = "";
 
   const { data, error } = await supabaseClient.functions.invoke("run-analysis");
 
-  btnAnalizar.disabled = false;
-  btnAnalizar.textContent = "Analizar ahora";
-
   if (error || (data && data.ok === false)) {
+    btnAnalizar.disabled = false;
+    btnAnalizar.textContent = "Analizar ahora";
     analizarMensaje.textContent = "Error al iniciar. Intenta de nuevo.";
     return;
   }
 
-  analizarMensaje.textContent = "Análisis en curso — tarda unos minutos. Vuelve a entrar en un rato.";
+  // El analisis corre en GitHub Actions en segundo plano (tarda varios
+  // minutos) -- en vez de dejar un mensaje estatico y que el usuario tenga
+  // que salir y volver a entrar, la app pregunta sola cada 15 segundos si
+  // ya hay picks nuevos guardados despues del momento en que se dio clic,
+  // y se actualiza sola apenas los encuentra (o despues de 5 minutos, lo
+  // que pase primero).
+  const momentoClick = new Date().toISOString();
+  let intentos = 0;
+  const maxIntentos = 20; // 20 x 15s = 5 minutos
+
+  btnAnalizar.textContent = "Analizando...";
+  analizarMensaje.textContent = "Análisis en curso — la app se va a actualizar sola cuando termine.";
+
+  pollingAnalisis = setInterval(async () => {
+    intentos++;
+    const { data: nuevos } = await supabaseClient
+      .from("picks")
+      .select("id")
+      .gt("creado_en", momentoClick)
+      .limit(1);
+
+    const yaTermino = nuevos && nuevos.length > 0;
+
+    if (yaTermino || intentos >= maxIntentos) {
+      clearInterval(pollingAnalisis);
+      pollingAnalisis = null;
+      btnAnalizar.disabled = false;
+      btnAnalizar.textContent = "Analizar ahora";
+      analizarMensaje.textContent = yaTermino
+        ? "¡Listo! Partidos actualizados."
+        : "Sigue tardando más de lo normal -- entra en un rato y dale refrescar.";
+      cargarPicks(diaActivo); // refresca automatico la vista actual
+    } else {
+      analizarMensaje.textContent = `Analizando... (${intentos}/${maxIntentos})`;
+    }
+  }, 15000);
 });
 
 // ================== TABS ==================
