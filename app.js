@@ -182,26 +182,64 @@ tabs.forEach(tab => {
 });
 
 // ================== ESTADISTICAS ==================
+let chartInstances = {};
+
+function dibujarChart(id, config) {
+  if (chartInstances[id]) chartInstances[id].destroy();
+  const el = document.getElementById(id);
+  if (!el) return;
+  chartInstances[id] = new Chart(el, config);
+}
+
+const COLOR_CONFIABLE = "#22c55e";
+const COLOR_RADAR_ALTO = "#86efac";
+const COLOR_RADAR = "#eab308";
+const COLOR_GANO = "#22c55e";
+const COLOR_FALLO = "#ef4444";
+const COLOR_PENDIENTE = "#cbd5e1";
+const COLOR_VALOR = "#2563eb";
+const COLOR_NEUTRO = "#94a3b8";
+
+const OPCIONES_BASE_CHART = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { grid: { color: "#f1f5f9" }, ticks: { font: { size: 11 } } },
+    y: { grid: { display: false }, ticks: { font: { size: 11.5 } } },
+  },
+};
+
 async function cargarEstadisticas() {
   comboResultadoDiv.innerHTML = "";
   resultadosDiv.innerHTML = `<div class="info-card">Cargando estadisticas...</div>`;
 
-  const { data, error } = await supabaseClient
-    .from("picks")
-    .select("liga_nombre, nivel, resultado")
-    .not("resultado", "is", null);
+  const [picksRes, comboRes] = await Promise.all([
+    supabaseClient
+      .from("picks")
+      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga")
+      .not("resultado", "is", null),
+    supabaseClient
+      .from("combinada_resultados")
+      .select("fecha, resultado_combinada, cuota_total"),
+  ]);
 
-  if (error) {
-    resultadosDiv.innerHTML = `<div class="info-card">Error: ${error.message}</div>`;
+  if (picksRes.error) {
+    resultadosDiv.innerHTML = `<div class="info-card">Error: ${picksRes.error.message}</div>`;
     return;
   }
 
-  if (!data || data.length === 0) {
+  if (!picksRes.data || picksRes.data.length === 0) {
     resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay picks verificados. Esto se va llenando solo, dia a dia, a medida que se juegan los partidos.</div>`;
     return;
   }
 
-  mostrarEstadisticas(data);
+  // La vista combinada_resultados es opcional (depende de que se haya
+  // creado en Supabase) -- si no existe o falla, el resto del dashboard
+  // funciona igual, solo se omite esa seccion.
+  const combos = (!comboRes.error && comboRes.data) ? comboRes.data : null;
+
+  mostrarEstadisticas(picksRes.data, combos);
 }
 
 function resumenAcierto(filas) {
@@ -211,10 +249,10 @@ function resumenAcierto(filas) {
   return { total, aciertos, fallos: total - aciertos, pct };
 }
 
-function mostrarEstadisticas(filas) {
+function mostrarEstadisticas(filas, combos) {
   let html = "";
 
-  // resumen general
+  // ---------- Resumen general ----------
   const general = resumenAcierto(filas);
   html += `<div class="stats-card stats-general">
     <p class="stats-titulo">Resumen general</p>
@@ -222,40 +260,210 @@ function mostrarEstadisticas(filas) {
     <p class="stats-detalle">${general.aciertos} aciertos de ${general.total} picks verificados (${general.fallos} fallos)</p>
   </div>`;
 
-  // por nivel
-  html += `<p class="liga-nombre">Por nivel de confianza</p>`;
+  // ---------- Por nivel de confianza ----------
   const nivelesOrden = ["CONFIABLE", "RADAR_ALTO", "RADAR"];
   const nivelesTexto = { CONFIABLE: "Confiable", RADAR_ALTO: "Alto (poca muestra)", RADAR: "En el radar" };
-  nivelesOrden.forEach(niv => {
-    const filasNivel = filas.filter(f => f.nivel === niv);
-    if (filasNivel.length === 0) return;
-    const r = resumenAcierto(filasNivel);
-    const nc = nivelClases(niv);
-    html += `<div class="stats-fila">
-      <span class="pill ${nc.pill}">${nivelesTexto[niv]}</span>
-      <span class="stats-fila-numero">${r.pct}%</span>
-      <span class="stats-fila-detalle">${r.aciertos}/${r.total}</span>
-    </div>`;
-  });
+  const nivelesColor = { CONFIABLE: COLOR_CONFIABLE, RADAR_ALTO: COLOR_RADAR_ALTO, RADAR: COLOR_RADAR };
+  const datosNivel = nivelesOrden
+    .map(niv => ({ niv, r: resumenAcierto(filas.filter(f => f.nivel === niv)) }))
+    .filter(d => d.r.total > 0);
 
-  // por liga
-  html += `<p class="liga-nombre">Por liga</p>`;
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Acierto por nivel de confianza</span>
+      <span class="stats-section-subtitulo">${datosNivel.reduce((s, d) => s + d.r.total, 0)} picks</span>
+    </div>
+    <div class="chart-card"><div class="chart-wrap medio"><canvas id="chart-nivel"></canvas></div></div>
+    <p class="stats-nota">El nivel Confiable deberia acertar mas seguido que Radar por diseno -- si con el tiempo dejan de verse asi de separados, es una senal para revisar.</p>
+  </div>`;
+
+  // ---------- Por liga ----------
   const porLiga = {};
   filas.forEach(f => {
     if (!porLiga[f.liga_nombre]) porLiga[f.liga_nombre] = [];
     porLiga[f.liga_nombre].push(f);
   });
-  Object.keys(porLiga).sort().forEach(liga => {
-    const r = resumenAcierto(porLiga[liga]);
-    html += `<div class="stats-fila">
-      <span class="stats-fila-liga">${liga}</span>
-      <span class="stats-fila-numero">${r.pct}%</span>
-      <span class="stats-fila-detalle">${r.aciertos}/${r.total}</span>
-    </div>`;
+  const datosLiga = Object.keys(porLiga)
+    .map(liga => ({ liga, r: resumenAcierto(porLiga[liga]) }))
+    .sort((a, b) => parseFloat(b.r.pct) - parseFloat(a.r.pct));
+
+  const altoLiga = Math.max(160, datosLiga.length * 30);
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Acierto por liga</span>
+      <span class="stats-section-subtitulo">${datosLiga.length} ligas con datos</span>
+    </div>
+    <div class="chart-card"><div class="chart-wrap" style="height:${altoLiga}px"><canvas id="chart-liga"></canvas></div></div>
+  </div>`;
+
+  // ---------- Evolucion en el tiempo ----------
+  const porSemana = {};
+  filas.forEach(f => {
+    if (!f.fecha_partido) return;
+    const d = new Date(f.fecha_partido);
+    const inicioSemana = new Date(d);
+    inicioSemana.setUTCDate(d.getUTCDate() - d.getUTCDay());
+    const clave = inicioSemana.toISOString().split("T")[0];
+    if (!porSemana[clave]) porSemana[clave] = [];
+    porSemana[clave].push(f);
   });
+  const semanasOrdenadas = Object.keys(porSemana).sort();
+
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Evolucion del acierto semana a semana</span>
+    </div>`;
+  if (semanasOrdenadas.length < 2) {
+    html += `<div class="chart-card-vacio">Todavia no hay suficientes semanas de datos verificados para dibujar la evolucion -- esto se va a ir llenando solo.</div>`;
+  } else {
+    html += `<div class="chart-card"><div class="chart-wrap alto"><canvas id="chart-evolucion"></canvas></div></div>`;
+  }
+  html += `</div>`;
+
+  // ---------- Combinada del dia ----------
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Combinada del dia</span>
+    </div>`;
+  if (!combos || combos.length === 0) {
+    html += `<div class="chart-card-vacio">Todavia no hay combinadas verificadas, o la vista "combinada_resultados" no esta creada en Supabase.</div>`;
+  } else {
+    const resueltas = combos.filter(c => c.resultado_combinada !== "PENDIENTE");
+    const ganadas = combos.filter(c => c.resultado_combinada === "GANO_COMPLETA").length;
+    const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
+    const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
+    const pctCombo = resueltas.length > 0 ? (100 * ganadas / resueltas.length).toFixed(1) : "0.0";
+
+    html += `<div class="stats-card stats-general stats-combo">
+      <p class="stats-titulo">Acierto historico de la combinada de 2 patas</p>
+      <p class="stats-numero">${pctCombo}%</p>
+      <p class="stats-detalle">${ganadas} ganadas completas de ${resueltas.length} verificadas (${falladas} fallidas, ${pendientes} pendientes)</p>
+    </div>`;
+    html += `<div class="chart-card"><div class="chart-wrap medio"><canvas id="chart-combo"></canvas></div></div>`;
+  }
+  html += `</div>`;
+
+  // ---------- Goles esperados (forma reciente por localia) ----------
+  const conMediana = filas.filter(f => f.sobre_mediana_liga === true || f.sobre_mediana_liga === false);
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Goles esperados vs promedio de su liga</span>
+      <span class="stats-section-subtitulo">${conMediana.length} picks con dato</span>
+    </div>`;
+  if (conMediana.length < 20) {
+    html += `<div class="chart-card-vacio">Muestra todavia muy chica (menos de 20 picks) -- este criterio solo esta activo en 5 de las 13 ligas por ahora. No sacar conclusiones todavia, dejar que se acumule.</div>`;
+  } else {
+    const sobreProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === true));
+    const bajoProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === false));
+    html += `<div class="stats-comparativa">
+      <div class="stats-comparativa-item">
+        <span class="pill pill-valor-alto">Sobre promedio</span>
+        <p class="stats-comparativa-numero">${sobreProm.pct}%</p>
+        <p class="stats-comparativa-detalle">${sobreProm.aciertos}/${sobreProm.total} picks</p>
+      </div>
+      <div class="stats-comparativa-item">
+        <span class="pill pill-valor-bajo">Bajo promedio</span>
+        <p class="stats-comparativa-numero">${bajoProm.pct}%</p>
+        <p class="stats-comparativa-detalle">${bajoProm.aciertos}/${bajoProm.total} picks</p>
+      </div>
+    </div>
+    <p class="stats-nota">Si "Sobre promedio" se mantiene por encima de "Bajo promedio" con el tiempo y con mas muestra, confirma que sirve como criterio de prioridad. Si se empareja o se voltea, hay que revisarlo.</p>`;
+  }
+  html += `</div>`;
 
   resultadosDiv.innerHTML = html;
+
+  // ---------- Dibujar las graficas (despues de inyectar el HTML) ----------
+  if (datosNivel.length > 0) {
+    dibujarChart("chart-nivel", {
+      type: "bar",
+      data: {
+        labels: datosNivel.map(d => nivelesTexto[d.niv]),
+        datasets: [{
+          data: datosNivel.map(d => parseFloat(d.r.pct)),
+          backgroundColor: datosNivel.map(d => nivelesColor[d.niv]),
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        ...OPCIONES_BASE_CHART,
+        indexAxis: "y",
+        scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x}% (${datosNivel[ctx.dataIndex].r.aciertos}/${datosNivel[ctx.dataIndex].r.total})` } },
+        },
+      },
+    });
+  }
+
+  dibujarChart("chart-liga", {
+    type: "bar",
+    data: {
+      labels: datosLiga.map(d => d.liga),
+      datasets: [{
+        data: datosLiga.map(d => parseFloat(d.r.pct)),
+        backgroundColor: COLOR_CONFIABLE,
+        borderRadius: 5,
+      }],
+    },
+    options: {
+      ...OPCIONES_BASE_CHART,
+      indexAxis: "y",
+      scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x}% (${datosLiga[ctx.dataIndex].r.aciertos}/${datosLiga[ctx.dataIndex].r.total})` } },
+      },
+    },
+  });
+
+  if (semanasOrdenadas.length >= 2) {
+    const pctsPorSemana = semanasOrdenadas.map(s => parseFloat(resumenAcierto(porSemana[s]).pct));
+    dibujarChart("chart-evolucion", {
+      type: "line",
+      data: {
+        labels: semanasOrdenadas.map(s => new Date(s).toLocaleDateString("es-CO", { day: "2-digit", month: "short" })),
+        datasets: [{
+          data: pctsPorSemana,
+          borderColor: COLOR_CONFIABLE,
+          backgroundColor: "rgba(34,197,94,0.1)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: 3,
+          pointBackgroundColor: COLOR_CONFIABLE,
+        }],
+      },
+      options: {
+        ...OPCIONES_BASE_CHART,
+        scales: { ...OPCIONES_BASE_CHART.scales, y: { ...OPCIONES_BASE_CHART.scales.y, min: 0, max: 100, title: { display: true, text: "% de acierto" } } },
+      },
+    });
+  }
+
+  if (combos && combos.length > 0) {
+    const ganadas = combos.filter(c => c.resultado_combinada === "GANO_COMPLETA").length;
+    const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
+    const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
+    dibujarChart("chart-combo", {
+      type: "bar",
+      data: {
+        labels: ["Gano completa", "Fallo", "Pendiente"],
+        datasets: [{
+          data: [ganadas, falladas, pendientes],
+          backgroundColor: [COLOR_GANO, COLOR_FALLO, COLOR_PENDIENTE],
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        ...OPCIONES_BASE_CHART,
+        indexAxis: "y",
+        scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, title: { display: true, text: "Numero de dias" }, ticks: { precision: 0 } } },
+      },
+    });
+  }
 }
+
 
 // ================== LEER PICKS DE SUPABASE ==================
 // Calcula la fecha calendario en COLOMBIA (UTC-5, sin horario de verano),
@@ -349,6 +557,15 @@ function mostrarResultados(picks) {
       if (p.regla_pct) {
         html += `<div class="partido-dato"><span>Historico (${p.regla_tipo})</span><strong>${p.regla_pct}%</strong></div>`;
       }
+      if (p.valor_vs_mercado !== null && p.valor_vs_mercado !== undefined) {
+        const vpp = (p.valor_vs_mercado * 100).toFixed(1);
+        const signo = p.valor_vs_mercado >= 0 ? '+' : '';
+        html += `<div class="partido-dato"><span>Valor vs mercado</span><strong>${signo}${vpp}pp</strong></div>`;
+      }
+      if (p.btts_mercado_pct !== null && p.btts_mercado_pct !== undefined) {
+        html += `<div class="partido-dato"><span>BTTS mercado (justo)</span><strong>${p.btts_mercado_pct}%</strong></div>`;
+        html += `<div class="partido-dato"><span>Margen del mercado (vig)</span><strong>${p.vig_mercado_pct}%</strong></div>`;
+      }
       // Forma reciente por localia -- local anotando/recibiendo DE LOCAL,
       // visitante anotando/recibiendo DE VISITANTE (ultimos 6 partidos en
       // ese rol especifico). Solo se muestra si hay historial suficiente.
@@ -358,7 +575,7 @@ function mostrarResultados(picks) {
         html += `<div class="partido-dato"><span>Local recibe de local (últ. 6)</span><strong>${p.forma_local_recibe}</strong></div>`;
         html += `<div class="partido-dato"><span>Visitante anota de visitante</span><strong>${p.forma_visita_anota}</strong></div>`;
         html += `<div class="partido-dato"><span>Visitante recibe de visitante</span><strong>${p.forma_visita_recibe}</strong></div>`;
-        const badge = p.sobre_mediana_liga === true ? ' ⭐' : '';
+        const badge = p.sobre_mediana_liga === true ? '<span class="badge-inline">Sobre promedio de su liga</span>' : '';
         html += `<div class="partido-dato"><span>Goles esperados</span><strong>${p.goles_esperados}${badge}</strong></div>`;
         html += `</div>`;
       }

@@ -146,6 +146,11 @@ main { flex: 1; padding: 12px 16px; }
 .cuota-radar-alto { color: #16a34a !important; }
 .cuota-radar { color: #a16207 !important; }
 
+.badge-inline {
+  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px;
+  margin-left: 6px; background: #eff6ff; color: #1d4ed8; vertical-align: middle;
+}
+
 footer { text-align: center; padding: 16px; font-size: 10px; color: #94a3b8; background: #ffffff; border-top: 1px solid #e2e8f0; }
 
 /* ---- ESTADISTICAS ---- */
@@ -168,3 +173,52 @@ footer { text-align: center; padding: 16px; font-size: 10px; color: #94a3b8; bac
 .stats-fila-liga { font-size: 13px; font-weight: 500; color: #0f172a; flex: 1; }
 .stats-fila-numero { font-size: 15px; font-weight: 700; color: #0f172a; margin: 0 10px; }
 .stats-fila-detalle { font-size: 11px; color: #94a3b8; }
+
+/* ---- DASHBOARD DE ESTADISTICAS ---- */
+
+.stats-section { margin-bottom: 28px; }
+
+.stats-section-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0;
+}
+
+.stats-section-titulo { font-size: 15px; font-weight: 600; color: #0f172a; }
+.stats-section-subtitulo { font-size: 11px; color: #94a3b8; }
+
+.chart-card {
+  background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px;
+  padding: 16px 14px 10px; margin-bottom: 10px;
+}
+
+.chart-card-vacio {
+  background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 14px;
+  padding: 22px 16px; text-align: center; font-size: 12.5px; color: #94a3b8;
+}
+
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap.alto { height: 220px; }
+.chart-wrap.medio { height: 180px; }
+
+/* fila de dos numeros grandes lado a lado, ej. Confiable vs Radar */
+.stats-comparativa { display: flex; gap: 10px; margin-bottom: 14px; }
+
+.stats-comparativa-item {
+  flex: 1; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px;
+  padding: 16px 12px; text-align: center;
+}
+
+.stats-comparativa-item .pill { display: inline-block; margin-bottom: 10px; }
+.stats-comparativa-numero { font-size: 26px; font-weight: 700; color: #0f172a; }
+.stats-comparativa-detalle { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+
+.stats-general.stats-combo { border-color: #2563eb; background: #eff6ff; }
+.stats-general.stats-combo .stats-numero { color: #1d4ed8; }
+
+.pill-valor-alto { background: #eff6ff; color: #1d4ed8; }
+.pill-valor-bajo { background: #f1f5f9; color: #64748b; }
+.pill-pendiente { background: #f8fafc; color: #94a3b8; border: 1px solid #e2e8f0; }
+
+.stats-nota {
+  font-size: 11px; color: #94a3b8; line-height: 1.5; margin-top: 8px;
+}
