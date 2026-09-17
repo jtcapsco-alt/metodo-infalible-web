@@ -146,7 +146,7 @@ btnAnalizar.addEventListener("click", async () => {
     const { data: nuevos } = await supabaseClient
       .from("picks")
       .select("id")
-      .gt("creado_en", momentoClick)
+      .gt("actualizado_en", momentoClick)
       .limit(1);
 
     const yaTermino = nuevos && nuevos.length > 0;
