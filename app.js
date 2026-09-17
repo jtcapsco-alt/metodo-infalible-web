@@ -174,6 +174,8 @@ tabs.forEach(tab => {
 
     if (tab.dataset.vista === "stats") {
       cargarEstadisticas();
+    } else if (tab.dataset.vista === "resultados") {
+      cargarResultados();
     } else {
       diaActivo = parseInt(tab.dataset.dia);
       cargarPicks(diaActivo);
@@ -183,6 +185,7 @@ tabs.forEach(tab => {
 
 // ================== ESTADISTICAS ==================
 let chartInstances = {};
+let ligaAbierta = null;
 
 function dibujarChart(id, config) {
   if (chartInstances[id]) chartInstances[id].destroy();
@@ -203,12 +206,36 @@ const COLOR_NEUTRO = "#94a3b8";
 const OPCIONES_BASE_CHART = {
   responsive: true,
   maintainAspectRatio: false,
+  layout: { padding: { right: 46 } },
   plugins: { legend: { display: false } },
   scales: {
     x: { grid: { color: "#f1f5f9" }, ticks: { font: { size: 11 } } },
     y: { grid: { display: false }, ticks: { font: { size: 11.5 } } },
   },
 };
+
+// ---------- Aro de progreso (KPI circular, SVG puro) ----------
+function svgAro(pct, color, tamano, grosor) {
+  tamano = tamano || 96;
+  grosor = grosor || 10;
+  const r = (tamano - grosor) / 2;
+  const c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, pct));
+  const relleno = (p / 100) * c;
+  return `<svg width="${tamano}" height="${tamano}" viewBox="0 0 ${tamano} ${tamano}">
+    <circle cx="${tamano / 2}" cy="${tamano / 2}" r="${r}" fill="none" stroke="#f1f5f9" stroke-width="${grosor}" />
+    <circle cx="${tamano / 2}" cy="${tamano / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${grosor}"
+      stroke-dasharray="${relleno} ${c}" stroke-linecap="round"
+      transform="rotate(-90 ${tamano / 2} ${tamano / 2})" />
+  </svg>`;
+}
+
+function aroConNumero(pct, color, etiqueta, tamano) {
+  tamano = tamano || 96;
+  return `<div class="aro-wrap">${svgAro(pct, color, tamano)}
+    <div class="aro-numero" style="font-size:${Math.round(tamano * 0.22)}px">${pct}%${etiqueta ? `<span>${etiqueta}</span>` : ""}</div>
+  </div>`;
+}
 
 async function cargarEstadisticas() {
   comboResultadoDiv.innerHTML = "";
@@ -217,7 +244,7 @@ async function cargarEstadisticas() {
   const [picksRes, comboRes] = await Promise.all([
     supabaseClient
       .from("picks")
-      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga")
+      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga, partido, goles_local_final, goles_visita_final")
       .not("resultado", "is", null),
     supabaseClient
       .from("combinada_resultados")
@@ -234,11 +261,7 @@ async function cargarEstadisticas() {
     return;
   }
 
-  // La vista combinada_resultados es opcional (depende de que se haya
-  // creado en Supabase) -- si no existe o falla, el resto del dashboard
-  // funciona igual, solo se omite esa seccion.
   const combos = (!comboRes.error && comboRes.data) ? comboRes.data : null;
-
   mostrarEstadisticas(picksRes.data, combos);
 }
 
@@ -250,14 +273,18 @@ function resumenAcierto(filas) {
 }
 
 function mostrarEstadisticas(filas, combos) {
+  ligaAbierta = null;
   let html = "";
 
-  // ---------- Resumen general ----------
+  // ---------- Resumen general (aro de progreso) ----------
   const general = resumenAcierto(filas);
-  html += `<div class="stats-card stats-general">
-    <p class="stats-titulo">Resumen general</p>
-    <p class="stats-numero">${general.pct}%</p>
-    <p class="stats-detalle">${general.aciertos} aciertos de ${general.total} picks verificados (${general.fallos} fallos)</p>
+  html += `<div class="stats-card stats-general stats-general-aro">
+    ${aroConNumero(parseFloat(general.pct), COLOR_CONFIABLE, null, 100)}
+    <div>
+      <p class="stats-titulo">Resumen general</p>
+      <p class="stats-detalle">${general.aciertos} aciertos de ${general.total} picks verificados</p>
+      <p class="stats-detalle">${general.fallos} fallos</p>
+    </div>
   </div>`;
 
   // ---------- Por nivel de confianza ----------
@@ -293,7 +320,9 @@ function mostrarEstadisticas(filas, combos) {
       <span class="stats-section-titulo">Acierto por liga</span>
       <span class="stats-section-subtitulo">${datosLiga.length} ligas con datos</span>
     </div>
-    <div class="chart-card"><div class="chart-wrap" style="height:${altoLiga}px"><canvas id="chart-liga"></canvas></div></div>
+    <p class="stats-ayuda">Toca una barra para ver los partidos de esa liga, con marcador</p>
+    <div class="chart-card clicable"><div class="chart-wrap" style="height:${altoLiga}px"><canvas id="chart-liga"></canvas></div></div>
+    <div id="detalle-liga-panel"></div>
   </div>`;
 
   // ---------- Evolucion en el tiempo ----------
@@ -332,12 +361,15 @@ function mostrarEstadisticas(filas, combos) {
     const ganadas = combos.filter(c => c.resultado_combinada === "GANO_COMPLETA").length;
     const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
     const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
-    const pctCombo = resueltas.length > 0 ? (100 * ganadas / resueltas.length).toFixed(1) : "0.0";
+    const pctCombo = resueltas.length > 0 ? (100 * ganadas / resueltas.length) : 0;
 
-    html += `<div class="stats-card stats-general stats-combo">
-      <p class="stats-titulo">Acierto historico de la combinada de 2 patas</p>
-      <p class="stats-numero">${pctCombo}%</p>
-      <p class="stats-detalle">${ganadas} ganadas completas de ${resueltas.length} verificadas (${falladas} fallidas, ${pendientes} pendientes)</p>
+    html += `<div class="stats-card stats-general stats-combo stats-general-aro">
+      ${aroConNumero(parseFloat(pctCombo.toFixed(1)), COLOR_VALOR, null, 100)}
+      <div>
+        <p class="stats-titulo">Acierto historico de la combinada de 2 patas</p>
+        <p class="stats-detalle">${ganadas} ganadas completas de ${resueltas.length} verificadas</p>
+        <p class="stats-detalle">${falladas} fallidas, ${pendientes} pendientes</p>
+      </div>
     </div>`;
     html += `<div class="chart-card"><div class="chart-wrap medio"><canvas id="chart-combo"></canvas></div></div>`;
   }
@@ -351,19 +383,19 @@ function mostrarEstadisticas(filas, combos) {
       <span class="stats-section-subtitulo">${conMediana.length} picks con dato</span>
     </div>`;
   if (conMediana.length < 20) {
-    html += `<div class="chart-card-vacio">Muestra todavia muy chica (menos de 20 picks) -- este criterio solo esta activo en 5 de las 13 ligas por ahora. No sacar conclusiones todavia, dejar que se acumule.</div>`;
+    html += `<div class="chart-card-vacio">Muestra todavia muy chica (menos de 20 picks) -- este criterio solo esta activo en 11 de las 13 ligas por ahora. No sacar conclusiones todavia, dejar que se acumule.</div>`;
   } else {
     const sobreProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === true));
     const bajoProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === false));
     html += `<div class="stats-comparativa">
       <div class="stats-comparativa-item">
         <span class="pill pill-valor-alto">Sobre promedio</span>
-        <p class="stats-comparativa-numero">${sobreProm.pct}%</p>
+        ${aroConNumero(parseFloat(sobreProm.pct), COLOR_VALOR, null, 76)}
         <p class="stats-comparativa-detalle">${sobreProm.aciertos}/${sobreProm.total} picks</p>
       </div>
       <div class="stats-comparativa-item">
         <span class="pill pill-valor-bajo">Bajo promedio</span>
-        <p class="stats-comparativa-numero">${bajoProm.pct}%</p>
+        ${aroConNumero(parseFloat(bajoProm.pct), COLOR_NEUTRO, null, 76)}
         <p class="stats-comparativa-detalle">${bajoProm.aciertos}/${bajoProm.total} picks</p>
       </div>
     </div>
@@ -373,10 +405,13 @@ function mostrarEstadisticas(filas, combos) {
 
   resultadosDiv.innerHTML = html;
 
-  // ---------- Dibujar las graficas (despues de inyectar el HTML) ----------
+  // ---------- Dibujar las graficas ----------
+  const pluginsDisponibles = (typeof ChartDataLabels !== "undefined") ? [ChartDataLabels] : [];
+
   if (datosNivel.length > 0) {
     dibujarChart("chart-nivel", {
       type: "bar",
+      plugins: pluginsDisponibles,
       data: {
         labels: datosNivel.map(d => nivelesTexto[d.niv]),
         datasets: [{
@@ -391,7 +426,10 @@ function mostrarEstadisticas(filas, combos) {
         scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x}% (${datosNivel[ctx.dataIndex].r.aciertos}/${datosNivel[ctx.dataIndex].r.total})` } },
+          datalabels: {
+            anchor: "end", align: "end", color: "#0f172a", font: { size: 11.5, weight: "600" },
+            formatter: (value, ctx) => `${value}% (${datosNivel[ctx.dataIndex].r.aciertos}/${datosNivel[ctx.dataIndex].r.total})`,
+          },
         },
       },
     });
@@ -399,6 +437,7 @@ function mostrarEstadisticas(filas, combos) {
 
   dibujarChart("chart-liga", {
     type: "bar",
+    plugins: pluginsDisponibles,
     data: {
       labels: datosLiga.map(d => d.liga),
       datasets: [{
@@ -413,7 +452,15 @@ function mostrarEstadisticas(filas, combos) {
       scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x}% (${datosLiga[ctx.dataIndex].r.aciertos}/${datosLiga[ctx.dataIndex].r.total})` } },
+        datalabels: {
+          anchor: "end", align: "end", color: "#0f172a", font: { size: 11, weight: "600" },
+          formatter: (value, ctx) => `${value}% (${datosLiga[ctx.dataIndex].r.aciertos}/${datosLiga[ctx.dataIndex].r.total})`,
+        },
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const liga = datosLiga[elements[0].index].liga;
+        mostrarDetalleLiga(liga, filas);
       },
     },
   });
@@ -446,22 +493,146 @@ function mostrarEstadisticas(filas, combos) {
     const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
     const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
     dibujarChart("chart-combo", {
-      type: "bar",
+      type: "doughnut",
+      plugins: pluginsDisponibles,
       data: {
         labels: ["Gano completa", "Fallo", "Pendiente"],
         datasets: [{
           data: [ganadas, falladas, pendientes],
           backgroundColor: [COLOR_GANO, COLOR_FALLO, COLOR_PENDIENTE],
-          borderRadius: 6,
+          borderWidth: 2,
+          borderColor: "#ffffff",
         }],
       },
       options: {
-        ...OPCIONES_BASE_CHART,
-        indexAxis: "y",
-        scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, title: { display: true, text: "Numero de dias" }, ticks: { precision: 0 } } },
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: { position: "bottom", labels: { font: { size: 11.5 }, boxWidth: 12, padding: 14 } },
+          datalabels: {
+            color: "#ffffff", font: { size: 12, weight: "700" },
+            formatter: (value) => (value > 0 ? value : ""),
+          },
+        },
       },
     });
   }
+}
+
+function mostrarDetalleLiga(liga, filas) {
+  const panel = document.getElementById("detalle-liga-panel");
+  if (!panel) return;
+
+  if (ligaAbierta === liga) {
+    panel.innerHTML = "";
+    ligaAbierta = null;
+    return;
+  }
+  ligaAbierta = liga;
+
+  const partidos = filas
+    .filter(f => f.liga_nombre === liga)
+    .sort((a, b) => new Date(b.fecha_partido) - new Date(a.fecha_partido));
+
+  let html = `<div class="liga-detalle">
+    <p class="liga-detalle-titulo">${liga} -- ${partidos.length} picks verificados</p>`;
+
+  partidos.forEach(p => {
+    const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
+    const marcador = tieneMarcador ? `${p.goles_local_final}-${p.goles_visita_final}` : "s/d";
+    const fecha = p.fecha_partido ? new Date(p.fecha_partido).toLocaleDateString("es-CO", { day: "2-digit", month: "short" }) : "";
+    const badge = p.resultado === true
+      ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
+      : '<span class="resultado-badge resultado-fallo">Fallo</span>';
+    html += `<div class="liga-detalle-fila">
+      <span class="liga-detalle-partido">${p.partido || "?"} <span style="color:#cbd5e1">(${fecha})</span></span>
+      <span class="liga-detalle-marcador">${marcador}</span>
+      ${badge}
+    </div>`;
+  });
+
+  html += `</div>`;
+  panel.innerHTML = html;
+}
+
+// ================== RESULTADOS (marcadores de dias anteriores) ==================
+function fechaColombiaDeTimestamp(ts) {
+  const d = new Date(new Date(ts).getTime() - 5 * 60 * 60 * 1000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+async function cargarResultados() {
+  resultadosDiv.innerHTML = '<p class="info-card">Cargando...</p>';
+  comboResultadoDiv.innerHTML = "";
+
+  const hoy = hoyISO(0);
+  const desde = hoyISO(-3);
+
+  const { data, error } = await supabaseClient
+    .from("picks")
+    .select("*")
+    .gte("fecha_partido", desde + "T00:00:00-05:00")
+    .lt("fecha_partido", hoy + "T00:00:00-05:00")
+    .not("resultado", "is", null)
+    .order("fecha_partido", { ascending: false });
+
+  if (error) {
+    resultadosDiv.innerHTML = `<div class="info-card">Error leyendo resultados: ${error.message}</div>`;
+    return;
+  }
+
+  mostrarResultadosPasados(data || []);
+}
+
+function mostrarResultadosPasados(picks) {
+  if (picks.length === 0) {
+    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay resultados verificados en los ultimos 3 dias.</div>`;
+    return;
+  }
+
+  const porDia = {};
+  picks.forEach(p => {
+    const clave = fechaColombiaDeTimestamp(p.fecha_partido);
+    if (!porDia[clave]) porDia[clave] = [];
+    porDia[clave].push(p);
+  });
+
+  const diasOrdenados = Object.keys(porDia).sort().reverse();
+  let html = "";
+
+  diasOrdenados.forEach(dia => {
+    const fechaLegible = new Date(dia + "T12:00:00").toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" });
+    const picksDia = porDia[dia];
+    const aciertosDia = picksDia.filter(p => p.resultado === true).length;
+    html += `<div class="dia-header">${fechaLegible} -- ${aciertosDia}/${picksDia.length} acertados</div>`;
+
+    picksDia.forEach(p => {
+      const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
+      const marcador = tieneMarcador ? `${p.goles_local_final} - ${p.goles_visita_final}` : "Marcador no disponible";
+      const nc = nivelClases(p.nivel);
+      const badge = p.resultado === true
+        ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
+        : '<span class="resultado-badge resultado-fallo">Fallo</span>';
+
+      html += `<div class="marcador-card">
+        <div class="marcador-card-top">
+          <span class="marcador-equipos">${p.partido}</span>
+          ${badge}
+        </div>
+        <p class="marcador-final">${marcador}</p>
+        <div class="marcador-meta">
+          <span class="marcador-meta-izq">${p.liga_nombre} -- <span class="pill ${nc.pill}">${nc.texto}</span></span>
+          <span class="marcador-meta-izq">Cuota ${p.cuota}</span>
+        </div>
+      </div>`;
+    });
+  });
+
+  resultadosDiv.innerHTML = html;
 }
 
 
