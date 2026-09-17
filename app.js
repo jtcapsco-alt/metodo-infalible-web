@@ -375,7 +375,63 @@ function mostrarEstadisticas(filas, combos) {
   }
   html += `</div>`;
 
-  // ---------- Goles esperados (forma reciente por localia) ----------
+  // ---------- Fin de semana (sabado y domingo) ----------
+  function diaSemanaColombia(ts) {
+    const d = new Date(new Date(ts).getTime() - 5 * 60 * 60 * 1000);
+    return d.getUTCDay(); // 0=Domingo ... 6=Sabado
+  }
+  const conFecha = filas.filter(f => f.fecha_partido);
+  const sabado = conFecha.filter(f => diaSemanaColombia(f.fecha_partido) === 6);
+  const domingo = conFecha.filter(f => diaSemanaColombia(f.fecha_partido) === 0);
+  const finDeSemana = [...sabado, ...domingo];
+  const entreSemana = conFecha.filter(f => {
+    const d = diaSemanaColombia(f.fecha_partido);
+    return d !== 6 && d !== 0;
+  });
+
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Rendimiento en fin de semana</span>
+      <span class="stats-section-subtitulo">${finDeSemana.length} picks (sab+dom)</span>
+    </div>`;
+  if (finDeSemana.length < 10) {
+    html += `<div class="chart-card-vacio">Todavia muy pocos sabados/domingos verificados para sacar algo en limpio -- se va llenando solo cada fin de semana.</div>`;
+  } else {
+    const rEntreSemana = resumenAcierto(entreSemana);
+    const rFinDeSemana = resumenAcierto(finDeSemana);
+    const rSabado = resumenAcierto(sabado);
+    const rDomingo = resumenAcierto(domingo);
+    html += `<p class="stats-ayuda">Entre semana vs fin de semana</p>
+    <div class="stats-comparativa">
+      <div class="stats-comparativa-item">
+        <span class="pill pill-valor-bajo">Entre semana</span>
+        ${aroConNumero(parseFloat(rEntreSemana.pct), COLOR_NEUTRO, null, 80)}
+        <p class="stats-comparativa-detalle">${rEntreSemana.aciertos}/${rEntreSemana.total} picks</p>
+      </div>
+      <div class="stats-comparativa-item">
+        <span class="pill pill-valor-alto">Fin de semana</span>
+        ${aroConNumero(parseFloat(rFinDeSemana.pct), COLOR_VALOR, null, 80)}
+        <p class="stats-comparativa-detalle">${rFinDeSemana.aciertos}/${rFinDeSemana.total} picks</p>
+      </div>
+    </div>
+    <p class="stats-ayuda">Sabado vs domingo, por separado</p>
+    <div class="stats-comparativa">
+      <div class="stats-comparativa-item">
+        <span class="pill pill-radar">Sabado</span>
+        ${aroConNumero(parseFloat(rSabado.pct), COLOR_RADAR, null, 80)}
+        <p class="stats-comparativa-detalle">${rSabado.aciertos}/${rSabado.total} picks</p>
+      </div>
+      <div class="stats-comparativa-item">
+        <span class="pill pill-confiable">Domingo</span>
+        ${aroConNumero(parseFloat(rDomingo.pct), COLOR_CONFIABLE, null, 80)}
+        <p class="stats-comparativa-detalle">${rDomingo.aciertos}/${rDomingo.total} picks</p>
+      </div>
+    </div>
+    <p class="stats-nota">Esta es la estadistica separada que pediste -- mide solo sabados y domingos, sin mezclarse con el resto de la semana. Con mas fines de semana acumulados, esto se vuelve mas confiable.</p>`;
+  }
+  html += `</div>`;
+
+
   const conMediana = filas.filter(f => f.sobre_mediana_liga === true || f.sobre_mediana_liga === false);
   html += `<div class="stats-section">
     <div class="stats-section-header">
@@ -565,12 +621,26 @@ function fechaColombiaDeTimestamp(ts) {
   return `${y}-${m}-${day}`;
 }
 
+function etiquetaDiaCorta(fechaStr) {
+  const d = new Date(fechaStr + "T12:00:00");
+  const diasSemana = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+  return `${diasSemana[d.getDay()]} ${d.getDate()}`;
+}
+
+function etiquetaDiaLarga(fechaStr) {
+  const d = new Date(fechaStr + "T12:00:00");
+  return d.toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" });
+}
+
+let datosResultadosPorDia = {};
+let diaResultadoActivo = null;
+
 async function cargarResultados() {
   resultadosDiv.innerHTML = '<p class="info-card">Cargando...</p>';
   comboResultadoDiv.innerHTML = "";
 
   const hoy = hoyISO(0);
-  const desde = hoyISO(-3);
+  const desde = hoyISO(-4);
 
   const { data, error } = await supabaseClient
     .from("picks")
@@ -585,54 +655,71 @@ async function cargarResultados() {
     return;
   }
 
-  mostrarResultadosPasados(data || []);
-}
-
-function mostrarResultadosPasados(picks) {
-  if (picks.length === 0) {
-    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay resultados verificados en los ultimos 3 dias.</div>`;
+  if (!data || data.length === 0) {
+    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay resultados verificados en los ultimos dias.</div>`;
     return;
   }
 
-  const porDia = {};
-  picks.forEach(p => {
+  datosResultadosPorDia = {};
+  data.forEach(p => {
     const clave = fechaColombiaDeTimestamp(p.fecha_partido);
-    if (!porDia[clave]) porDia[clave] = [];
-    porDia[clave].push(p);
+    if (!datosResultadosPorDia[clave]) datosResultadosPorDia[clave] = [];
+    datosResultadosPorDia[clave].push(p);
   });
 
-  const diasOrdenados = Object.keys(porDia).sort().reverse();
-  let html = "";
+  const diasOrdenados = Object.keys(datosResultadosPorDia).sort().reverse();
+  diaResultadoActivo = diasOrdenados[0];
+  renderizarPantallaResultados();
+}
 
+function renderizarPantallaResultados() {
+  const diasOrdenados = Object.keys(datosResultadosPorDia).sort().reverse();
+
+  let html = '<div class="dias-selector">';
   diasOrdenados.forEach(dia => {
-    const fechaLegible = new Date(dia + "T12:00:00").toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" });
-    const picksDia = porDia[dia];
+    const picksDia = datosResultadosPorDia[dia];
     const aciertosDia = picksDia.filter(p => p.resultado === true).length;
-    html += `<div class="dia-header">${fechaLegible} -- ${aciertosDia}/${picksDia.length} acertados</div>`;
+    const activo = dia === diaResultadoActivo ? " dia-pill-activo" : "";
+    html += `<div class="dia-pill${activo}" data-dia="${dia}">
+      <span class="dia-pill-fecha">${etiquetaDiaCorta(dia)}</span>
+      <span class="dia-pill-detalle">${aciertosDia}/${picksDia.length}</span>
+    </div>`;
+  });
+  html += "</div>";
 
-    picksDia.forEach(p => {
-      const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
-      const marcador = tieneMarcador ? `${p.goles_local_final} - ${p.goles_visita_final}` : "Marcador no disponible";
-      const nc = nivelClases(p.nivel);
-      const badge = p.resultado === true
-        ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
-        : '<span class="resultado-badge resultado-fallo">Fallo</span>';
+  const picksDia = datosResultadosPorDia[diaResultadoActivo] || [];
+  const aciertosDia = picksDia.filter(p => p.resultado === true).length;
+  html += `<div class="dia-header">${etiquetaDiaLarga(diaResultadoActivo)} -- ${aciertosDia}/${picksDia.length} acertados</div>`;
 
-      html += `<div class="marcador-card">
-        <div class="marcador-card-top">
-          <span class="marcador-equipos">${p.partido}</span>
-          ${badge}
-        </div>
-        <p class="marcador-final">${marcador}</p>
-        <div class="marcador-meta">
-          <span class="marcador-meta-izq">${p.liga_nombre} -- <span class="pill ${nc.pill}">${nc.texto}</span></span>
-          <span class="marcador-meta-izq">Cuota ${p.cuota}</span>
-        </div>
-      </div>`;
-    });
+  picksDia.forEach(p => {
+    const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
+    const marcador = tieneMarcador ? `${p.goles_local_final} - ${p.goles_visita_final}` : "Marcador no disponible";
+    const nc = nivelClases(p.nivel);
+    const badge = p.resultado === true
+      ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
+      : '<span class="resultado-badge resultado-fallo">Fallo</span>';
+
+    html += `<div class="marcador-card">
+      <div class="marcador-card-top">
+        <span class="marcador-equipos">${p.partido}</span>
+        ${badge}
+      </div>
+      <p class="marcador-final">${marcador}</p>
+      <div class="marcador-meta">
+        <span class="marcador-meta-izq">${p.liga_nombre} -- <span class="pill ${nc.pill}">${nc.texto}</span></span>
+        <span class="marcador-meta-izq">Cuota ${p.cuota}</span>
+      </div>
+    </div>`;
   });
 
   resultadosDiv.innerHTML = html;
+
+  document.querySelectorAll(".dia-pill").forEach(el => {
+    el.addEventListener("click", () => {
+      diaResultadoActivo = el.dataset.dia;
+      renderizarPantallaResultados();
+    });
+  });
 }
 
 
