@@ -220,18 +220,40 @@ function mostrarEstadisticas(filas) {
 }
 
 // ================== LEER PICKS DE SUPABASE ==================
+// Calcula la fecha calendario en COLOMBIA (UTC-5, sin horario de verano),
+// SIN depender de la zona horaria del dispositivo/navegador.
+//
+// ANTES: usaba `new Date().toISOString().split("T")[0]`, que siempre
+// convierte a UTC. Eso hacia que, desde las 7:00pm hora Colombia en
+// adelante (cuando en UTC ya cruzo la medianoche), la pestana "Hoy"
+// mostrara los partidos de MANANA por error -- por eso se veian dos dias
+// mezclados dependiendo de a que hora se abriera la app.
+//
+// AHORA: se resta 5 horas a la hora actual en UTC antes de leer el dia
+// calendario, para que la frontera de "hoy" siempre caiga en la
+// medianoche real de Colombia, sin importar la zona horaria del telefono.
 function hoyISO(offsetDias = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDias);
-  return d.toISOString().split("T")[0];
+  const ahoraUTC = new Date();
+  const colombiaMs = ahoraUTC.getTime() - 5 * 60 * 60 * 1000; // UTC-5
+  const d = new Date(colombiaMs);
+  d.setUTCDate(d.getUTCDate() + offsetDias);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 async function cargarPicks(offsetDias = 0) {
   resultadosDiv.innerHTML = '<p class="info-card">Cargando...</p>';
   comboResultadoDiv.innerHTML = "";
   const fechaObjetivo = hoyISO(offsetDias);
-  const inicio = fechaObjetivo + "T00:00:00";
-  const fin = fechaObjetivo + "T23:59:59";
+
+  // Frontera del dia en hora Colombia (UTC-5) de forma EXPLICITA (con el
+  // "-05:00" al final). Antes se mandaba sin zona horaria, y Supabase la
+  // interpretaba como UTC -- corriendo la frontera del dia 5 horas
+  // respecto a la medianoche real de Colombia.
+  const inicio = fechaObjetivo + "T00:00:00-05:00";
+  const fin = fechaObjetivo + "T23:59:59-05:00";
 
   const { data, error } = await supabaseClient
     .from("picks")
@@ -288,6 +310,19 @@ function mostrarResultados(picks) {
       html += `<div class="partido-dato"><span>Cuota Over 2.5</span><strong class="${nc.cuota}">${p.cuota}</strong></div>`;
       if (p.regla_pct) {
         html += `<div class="partido-dato"><span>Historico (${p.regla_tipo})</span><strong>${p.regla_pct}%</strong></div>`;
+      }
+      // Forma reciente por localia -- local anotando/recibiendo DE LOCAL,
+      // visitante anotando/recibiendo DE VISITANTE (ultimos 6 partidos en
+      // ese rol especifico). Solo se muestra si hay historial suficiente.
+      if (p.goles_esperados !== null && p.goles_esperados !== undefined) {
+        html += `<div class="partido-forma">`;
+        html += `<div class="partido-dato"><span>Local anota de local (últ. 6)</span><strong>${p.forma_local_anota}</strong></div>`;
+        html += `<div class="partido-dato"><span>Local recibe de local (últ. 6)</span><strong>${p.forma_local_recibe}</strong></div>`;
+        html += `<div class="partido-dato"><span>Visitante anota de visitante</span><strong>${p.forma_visita_anota}</strong></div>`;
+        html += `<div class="partido-dato"><span>Visitante recibe de visitante</span><strong>${p.forma_visita_recibe}</strong></div>`;
+        const badge = p.sobre_mediana_liga === true ? ' ⭐' : '';
+        html += `<div class="partido-dato"><span>Goles esperados</span><strong>${p.goles_esperados}${badge}</strong></div>`;
+        html += `</div>`;
       }
       html += `</div>`;
     });
