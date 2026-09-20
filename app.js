@@ -244,7 +244,7 @@ async function cargarEstadisticas() {
   const [picksRes, comboRes] = await Promise.all([
     supabaseClient
       .from("picks")
-      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga, partido, goles_local_final, goles_visita_final")
+      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga, partido, goles_local_final, goles_visita_final, cumple_filtro_triple")
       .not("resultado", "is", null),
     supabaseClient
       .from("combinada_resultados")
@@ -456,6 +456,34 @@ function mostrarEstadisticas(filas, combos) {
       </div>
     </div>
     <p class="stats-nota">Si "Sobre promedio" se mantiene por encima de "Bajo promedio" con el tiempo y con mas muestra, confirma que sirve como criterio de prioridad. Si se empareja o se voltea, hay que revisarlo.</p>`;
+  }
+  html += `</div>`;
+
+  // ---------- Filtro triple ----------
+  const conFiltro = filas.filter(f => f.cumple_filtro_triple === true || f.cumple_filtro_triple === false);
+  html += `<div class="stats-section">
+    <div class="stats-section-header">
+      <span class="stats-section-titulo">Filtro triple (probabilidad + cuota + goles esperados)</span>
+      <span class="stats-section-subtitulo">${conFiltro.length} picks con dato</span>
+    </div>`;
+  if (conFiltro.length < 20) {
+    html += `<div class="chart-card-vacio">Muestra todavia muy chica -- este filtro es nuevo, se va llenando desde ahora.</div>`;
+  } else {
+    const cumple = resumenAcierto(conFiltro.filter(f => f.cumple_filtro_triple === true));
+    const noCumple = resumenAcierto(conFiltro.filter(f => f.cumple_filtro_triple === false));
+    html += `<div class="stats-comparativa">
+      <div class="stats-comparativa-item">
+        <span class="pill" style="background:#f5f3ff;color:#6d28d9">Cumple el filtro</span>
+        ${aroConNumero(parseFloat(cumple.pct), "#7c3aed", null, 80)}
+        <p class="stats-comparativa-detalle">${cumple.aciertos}/${cumple.total} picks</p>
+      </div>
+      <div class="stats-comparativa-item">
+        <span class="pill pill-valor-bajo">No lo cumple</span>
+        ${aroConNumero(parseFloat(noCumple.pct), COLOR_NEUTRO, null, 80)}
+        <p class="stats-comparativa-detalle">${noCumple.aciertos}/${noCumple.total} picks</p>
+      </div>
+    </div>
+    <p class="stats-nota">Backtest inicial (Sept 2026, 11 de 13 ligas): 71.4% vs 61.7%. Esto mide si esa ventaja se sostiene con datos reales en vivo, dia a dia.</p>`;
   }
   html += `</div>`;
 
@@ -695,11 +723,13 @@ function renderizarPantallaResultados() {
     const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
     const marcador = tieneMarcador ? `${p.goles_local_final} - ${p.goles_visita_final}` : "Marcador no disponible";
     const nc = nivelClases(p.nivel);
+    const esTriple = p.cumple_filtro_triple === true;
     const badge = p.resultado === true
       ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
       : '<span class="resultado-badge resultado-fallo">Fallo</span>';
 
-    html += `<div class="marcador-card">
+    html += `<div class="marcador-card${esTriple ? " partido-card-triple" : ""}">
+      ${esTriple ? '<div class="filtro-triple-banner">Cumple el filtro triple -- alta precision historica</div>' : ""}
       <div class="marcador-card-top">
         <span class="marcador-equipos">${p.partido}</span>
         ${badge}
@@ -788,11 +818,21 @@ function mostrarResultados(picks) {
     return;
   }
 
-  const conSenal = picks.filter(p => p.nivel === "CONFIABLE" || p.nivel === "RADAR").length;
-  let html = `<div class="info-card"><strong>${conSenal}</strong> de ${picks.length} partidos con señal.</div>`;
+  // Solo se muestran partidos con señal real (Confiable / Radar Alto /
+  // Radar) -- los que salen "Sin señal" o "Muestra insuficiente" se
+  // esconden de esta pantalla a proposito: no aportan nada a la hora de
+  // elegir un partido, solo eran ruido.
+  const conSenal = picks.filter(p => p.nivel === "CONFIABLE" || p.nivel === "RADAR_ALTO" || p.nivel === "RADAR");
+
+  if (conSenal.length === 0) {
+    resultadosDiv.innerHTML = `<div class="info-card">Ningun partido con señal clara para este dia (se analizaron ${picks.length}, ninguno califico como Confiable o Radar).</div>`;
+    return;
+  }
+
+  let html = `<div class="info-card"><strong>${conSenal.length}</strong> partido${conSenal.length === 1 ? "" : "s"} con señal para este dia.</div>`;
 
   const porLiga = {};
-  picks.forEach(p => {
+  conSenal.forEach(p => {
     if (!porLiga[p.liga_nombre]) porLiga[p.liga_nombre] = [];
     porLiga[p.liga_nombre].push(p);
   });
@@ -803,8 +843,13 @@ function mostrarResultados(picks) {
       const fecha = new Date(p.fecha_partido);
       const horaStr = fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
       const nc = nivelClases(p.nivel);
+      const esTriple = p.cumple_filtro_triple === true;
+      const claseTriple = esTriple ? " partido-card-triple" : "";
 
-      html += `<div class="partido-card ${nc.borde}">`;
+      html += `<div class="partido-card ${nc.borde}${claseTriple}">`;
+      if (esTriple) {
+        html += `<div class="filtro-triple-banner">Cumple el filtro triple -- alta precision historica</div>`;
+      }
       html += `<div class="partido-card-top">`;
       html += `<h3 class="partido-nombre">${p.partido}</h3>`;
       html += `<span class="pill ${nc.pill}">${nc.texto}</span>`;
