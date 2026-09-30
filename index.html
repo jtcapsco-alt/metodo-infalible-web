@@ -2,89 +2,91 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>Metodo Infalible</title>
-  <link rel="stylesheet" href="style.css?v=2">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=4">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 </head>
 <body>
   <div class="app">
 
-    <!-- SPLASH -- se muestra primero, siempre, unos segundos -->
+    <!-- SPLASH -->
     <div id="splash-screen" class="splash-screen">
-      <img id="splash-logo" src="logo_completo.png" alt="logo" class="splash-logo">
+      <img id="splash-logo" src="logo_completo.png" alt="Metodo Infalible" class="splash-logo">
       <div id="splash-bar-track" class="splash-bar-track">
         <div id="splash-bar-fill" class="splash-bar-fill"></div>
       </div>
       <p class="creador">Diseñado y creado por Jose Torres</p>
     </div>
 
-    <!-- LOGIN -- oculta hasta que termine el splash -->
+    <!-- LOGIN -->
     <div id="login-screen" class="login-screen" style="display:none;">
       <div class="login-box">
-        <img src="logo_completo.png" alt="logo" class="login-logo-img">
+        <img src="logo_completo.png" alt="Metodo Infalible" class="login-logo-img">
 
         <label for="login-email">Correo</label>
         <input type="email" id="login-email" placeholder="nombre@correo.com" autocomplete="email">
 
-        <label for="login-password">Contrasena</label>
+        <label for="login-password">Contraseña</label>
         <input type="password" id="login-password" placeholder="********" autocomplete="current-password">
 
         <button id="btn-login">Entrar</button>
         <p id="login-error" class="login-error"></p>
       </div>
-      <p class="login-footer">Acceso restringido - solo administradores</p>
+      <p class="login-footer">Acceso restringido, solo administradores</p>
       <p class="creador">Diseñado y creado por Jose Torres</p>
     </div>
 
-    <!-- APP -- oculta hasta login correcto -->
+    <!-- APP -->
     <div id="main-app" style="display:none;">
-      <header>
-        <div class="header-left">
-          <img src="icon-192.png" alt="logo" class="header-logo">
-          <div>
-            <p class="header-title">Metodo infalible</p>
-          </div>
+      <header class="hdr">
+        <div class="brand">
+          <img src="icon-192.png" alt="">
+          <span>Método infalible</span>
         </div>
-        <i id="btn-logout" class="ti ti-logout" aria-label="Salir"></i>
+        <button id="btn-logout" class="ib" aria-label="Salir">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2"/><path d="M9 12h12l-3-3m0 6l3-3"/></svg>
+        </button>
       </header>
 
-      <div class="tabs">
-        <div class="tab tab-activo" data-vista="dia" data-dia="0">Hoy</div>
-        <div class="tab" data-vista="dia" data-dia="1">Mañana</div>
-        <div class="tab" data-vista="dia" data-dia="2">Pasado</div>
-        <div class="tab" data-vista="resultados">Resultados</div>
-        <div class="tab" data-vista="stats">Estadísticas</div>
-      </div>
+      <main id="vista"></main>
 
-      <div style="padding:0 16px 14px;">
-        <button id="btn-analizar" style="background:#22c55e;color:#062712;font-size:13px;font-weight:600;padding:10px;border-radius:8px;border:none;width:100%;cursor:pointer;">Analizar ahora</button>
-        <p id="analizar-mensaje" style="font-size:11px;color:#64748b;margin-top:6px;text-align:center;"></p>
-      </div>
+      <div id="builder-slot"></div>
 
-      <main>
-        <div id="combo-resultado"></div>
-        <div id="resultados"></div>
-      </main>
-
-      <footer>
-        <p>Analisis pre-partido -- no garantiza resultados. Gestion de banca es tu responsabilidad.</p>
-        <p class="creador">Diseñado y creado por Jose Torres</p>
-      </footer>
+      <nav class="nav" id="nav" aria-label="Principal">
+        <button class="ni on" data-vista="hoy">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l-2 0l9 -9l9 9l-2 0"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/><path d="M9 21v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6"/></svg>
+          Hoy
+        </button>
+        <button class="ni" data-vista="manana">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M16 3v4M8 3v4M4 11h16M10 16h4M12 14l2 2l-2 2"/></svg>
+          Mañana
+        </button>
+        <button class="ni" data-vista="resultados">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3l8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
+          Resultados
+        </button>
+        <button class="ni" data-vista="stats">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M15 9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z"/><path d="M9 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z"/><path d="M4 20h14"/></svg>
+          Estadísticas
+        </button>
+      </nav>
     </div>
 
   </div>
 
-  <script src="app.js?v=2"></script>
+  <div id="sheet-root"></div>
+
+  <script src="app.js?v=4"></script>
   <script>
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("service-worker.js");

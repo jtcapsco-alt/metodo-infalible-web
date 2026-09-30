@@ -8,48 +8,170 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_
   },
 });
 
+const C = { acierto: "#0B7A55", fallo: "#B42318", tinta: "#1B1F27", gris: "#8C94A3", grisClaro: "#C5CAD3", linea: "#E9EBEE", apagado: "#5B6270" };
+const OBJETIVO_MIN = 1.80;
+const OBJETIVO_MAX = 2.00;
+const NIVELES_SENAL = ["CONFIABLE", "RADAR_ALTO", "RADAR"];
+const MIN_MUESTRA_SOLIDA = 30;   // minimo de picks por grupo para no avisar "muestra chica"
+const MIN_PICKS_LIGA = 10;       // por debajo, la fila de una liga se pinta en gris
+
 // ================== ELEMENTOS ==================
-const splashScreen = document.getElementById("splash-screen");
-const loginScreen = document.getElementById("login-screen");
-const mainApp = document.getElementById("main-app");
-const loginEmail = document.getElementById("login-email");
-const loginPassword = document.getElementById("login-password");
-const btnLogin = document.getElementById("btn-login");
-const loginError = document.getElementById("login-error");
-const btnLogout = document.getElementById("btn-logout");
-const resultadosDiv = document.getElementById("resultados");
-const comboResultadoDiv = document.getElementById("combo-resultado");
-const tabs = document.querySelectorAll(".tab");
+const $ = (id) => document.getElementById(id);
+const splashScreen = $("splash-screen");
+const loginScreen = $("login-screen");
+const mainApp = $("main-app");
+const loginEmail = $("login-email");
+const loginPassword = $("login-password");
+const btnLogin = $("btn-login");
+const loginError = $("login-error");
+const btnLogout = $("btn-logout");
+const vistaEl = $("vista");
+const builderSlot = $("builder-slot");
+const sheetRoot = $("sheet-root");
+const navBtns = document.querySelectorAll(".ni");
 
-let diaActivo = 0;
+// ================== UTILIDADES ==================
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmt(x, d = 1) {
+  return x === null || x === undefined || isNaN(x) ? "--" : Number(x).toFixed(d);
+}
+function signo(x, d = 1) {
+  if (x === null || x === undefined || isNaN(x)) return "--";
+  return (x >= 0 ? "+" : "-") + Math.abs(x).toFixed(d);
+}
+function esSenal(p) { return NIVELES_SENAL.includes(p.nivel); }
 
-// ================== SPLASH ==================
-// El splash dura ~6 segundos (logo + texto + barra), y despues decide
-// si mostrar login o la app directo, segun si ya habia sesion iniciada.
+// Dia calendario de COLOMBIA (UTC-5, sin horario de verano), sin depender de la
+// zona horaria del telefono.
+function hoyISO(offsetDias = 0) {
+  const d = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  d.setUTCDate(d.getUTCDate() + offsetDias);
+  return d.toISOString().slice(0, 10);
+}
+function fechaColombia(ts) {
+  return new Date(new Date(ts).getTime() - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+function diaSemana(fechaStr) { return new Date(fechaStr + "T12:00:00Z").getUTCDay(); } // 0=dom
+function esFinDeSemana(fechaStr) { const d = diaSemana(fechaStr); return d === 5 || d === 6 || d === 0; } // vie, sab, dom
+function horaCol(ts) {
+  return new Date(ts).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Bogota" });
+}
+function etiquetaDiaCorta(f) {
+  const n = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+  return `${n[diaSemana(f)]} ${parseInt(f.slice(8), 10)}`;
+}
+function etiquetaDiaLarga(f) {
+  return new Date(f + "T12:00:00Z").toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+}
+function fechaCorta(f) {
+  return new Date(f + "T12:00:00Z").toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+function fechaMini(f) {
+  return new Date(f + "T12:00:00Z").toLocaleDateString("es-CO", { day: "numeric", month: "short", timeZone: "UTC" }).replace(".", "");
+}
+function lunesDe(fechaStr) {
+  const d = new Date(fechaStr + "T12:00:00Z");
+  const dow = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
+
+// ---------- estadistica base ----------
+function resumen(filas) {
+  const total = filas.length;
+  const aciertos = filas.filter((f) => f.resultado === true).length;
+  return { total, aciertos, fallos: total - aciertos, pct: total > 0 ? (100 * aciertos) / total : null };
+}
+function unidades(filas) {
+  return filas.reduce((s, f) => s + (f.resultado === true ? Number(f.cuota) - 1 : -1), 0);
+}
+function rendimiento(filas) { return filas.length ? (100 * unidades(filas)) / filas.length : null; }
+function cuotaProm(filas) { return filas.length ? filas.reduce((s, f) => s + Number(f.cuota), 0) / filas.length : null; }
+function claseSigno(x) { return x === null || x === undefined ? "mut" : x < 0 ? "neg" : x > 0 ? "pos" : ""; }
+
+// ================== GRAFICAS (SVG propio, sin librerias) ==================
+let uidSvg = 0;
+
+// Linea con relleno: VERDE por encima de la referencia, ROJO por debajo.
+function graficaSplit(vals, ref, o = {}) {
+  const W = o.W || 92, H = o.H || 40, padr = o.padr || 0, padl = o.padl === undefined ? 3 : o.padl;
+  const margen = o.margen === undefined ? 0.5 : o.margen;
+  const minSpan = o.minSpan || 4;
+  const pt = o.pt === undefined ? 5 : o.pt;
+  const pb = o.xl ? 22 : 5;
+  let lo = o.lo, hi = o.hi;
+  if (lo === undefined) {
+    lo = Math.min(...vals, ref) - margen;
+    hi = Math.max(...vals, ref) + margen;
+    if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  }
+  const Y = (v) => +(pt + ((hi - v) / (hi - lo)) * (H - pt - pb)).toFixed(1);
+  const n = vals.length;
+  const X = (i) => +(padl + (n === 1 ? 0 : (i * (W - padl - padr)) / (n - 1))).toFixed(1);
+  const pts = vals.map((v, i) => [X(i), Y(v)]);
+  const ly = Y(ref);
+  const id = ++uidSvg;
+  const off = (ly / H).toFixed(3);
+  const linea = pts.map((p) => p.join(",")).join(" ");
+  const area = `M${pts[0][0]},${ly} ` + pts.map((p) => `L${p[0]},${p[1]}`).join(" ") + ` L${pts[pts.length - 1][0]},${ly} Z`;
+  let rej = "";
+  (o.yt || []).forEach((t) => {
+    rej += `<line x1="0" y1="${Y(t)}" x2="${W - padr + 6}" y2="${Y(t)}" stroke="${C.linea}" stroke-width="1"/><text x="${W - padr + 12}" y="${Y(t) + 4}" font-size="11" fill="${C.apagado}">${o.fmtY ? o.fmtY(t) : t}</text>`;
+  });
+  let xl = "";
+  (o.xl || []).forEach(([i, lab]) => { xl += `<text x="${X(i)}" y="${H - 5}" font-size="11" fill="${C.apagado}" text-anchor="middle">${esc(lab)}</text>`; });
+  const ultimo = vals[vals.length - 1] >= ref ? C.acierto : C.fallo;
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.aria || "Grafica de evolucion")}" style="max-width:100%;height:auto">
+    <defs><linearGradient id="g${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${H}"><stop offset="${off}" stop-color="${C.acierto}"/><stop offset="${off}" stop-color="${C.fallo}"/></linearGradient></defs>
+    ${rej}<path d="${area}" fill="url(#g${id})" fill-opacity="0.13"/>
+    <line x1="0" y1="${ly}" x2="${W - padr + 6}" y2="${ly}" stroke="${C.gris}" stroke-width="1" stroke-dasharray="3 3"/>
+    <polyline points="${linea}" fill="none" stroke="url(#g${id})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${pts[pts.length - 1][0]}" cy="${pts[pts.length - 1][1]}" r="${o.W > 200 ? 3.5 : 3}" fill="${ultimo}"/>${xl}</svg>`;
+}
+
+// Dos (o mas) lineas de rendimiento acumulado, con etiquetas directas al final.
+function graficaLineas(series, nFechas, o = {}) {
+  const W = o.W || 350, H = o.H || 150, padl = 6, padr = 52, pt = 10, pb = 22;
+  const todos = series.flatMap((s) => s.pts.map((p) => p.y)).concat([0]);
+  let lo = Math.min(...todos), hi = Math.max(...todos);
+  if (hi - lo < 2) { lo -= 1; hi += 1; }
+  const m = (hi - lo) * 0.12; lo -= m; hi += m;
+  const Y = (v) => +(pt + ((hi - v) / (hi - lo)) * (H - pt - pb)).toFixed(1);
+  const X = (i) => +(padl + (nFechas <= 1 ? 0 : (i * (W - padl - padr)) / (nFechas - 1))).toFixed(1);
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rendimiento acumulado en unidades" style="max-width:100%;height:auto">`;
+  s += `<line x1="0" y1="${Y(0)}" x2="${W - padr + 6}" y2="${Y(0)}" stroke="${C.gris}" stroke-width="1" stroke-dasharray="3 3"/><text x="${W - padr + 12}" y="${Y(0) + 4}" font-size="11" fill="${C.apagado}">0</text>`;
+  series.forEach((se) => {
+    if (!se.pts.length) return;
+    const pts = se.pts.map((p) => `${X(p.x)},${Y(p.y)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${se.dash ? ` stroke-dasharray="${se.dash}"` : ""}/>`;
+    const u = se.pts[se.pts.length - 1];
+    s += `<circle cx="${X(u.x)}" cy="${Y(u.y)}" r="3.5" fill="${se.color}"/><text x="${X(u.x) + 8}" y="${Y(u.y) + 4}" font-size="11" font-weight="600" fill="${se.color}">${signo(u.y, 1)}</text>`;
+  });
+  (o.xl || []).forEach(([i, lab]) => { s += `<text x="${X(i)}" y="${H - 5}" font-size="11" fill="${C.apagado}" text-anchor="middle">${esc(lab)}</text>`; });
+  return s + "</svg>";
+}
+
+// ================== SPLASH / LOGIN / SESION ==================
 const DURACION_SPLASH_MS = 6000;
 
 async function terminarSplash() {
   const { data: { session } } = await supabaseClient.auth.getSession();
   splashScreen.style.display = "none";
-  if (session) {
-    mostrarApp();
-  } else {
-    mostrarLogin();
-  }
+  if (session) mostrarApp(); else mostrarLogin();
 }
-
 setTimeout(terminarSplash, DURACION_SPLASH_MS);
 
-// ================== LOGIN / SESION ==================
 function mostrarLogin() {
+  cerrarSheet();
   loginScreen.style.display = "flex";
   mainApp.style.display = "none";
 }
-
 function mostrarApp() {
   loginScreen.style.display = "none";
   mainApp.style.display = "block";
-  cargarPicks(diaActivo);
+  ir(vistaActual);
   reiniciarTemporizadorInactividad();
 }
 
@@ -57,856 +179,832 @@ btnLogin.addEventListener("click", async () => {
   const email = loginEmail.value.trim();
   const password = loginPassword.value;
   loginError.textContent = "";
-
-  if (!email || !password) {
-    loginError.textContent = "Pon tu correo y contrasena.";
-    return;
-  }
-
+  if (!email || !password) { loginError.textContent = "Pon tu correo y contraseña."; return; }
   btnLogin.disabled = true;
   btnLogin.textContent = "Entrando...";
-
   const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-
   btnLogin.disabled = false;
   btnLogin.textContent = "Entrar";
-
-  if (error) {
-    loginError.textContent = "Correo o contrasena incorrectos.";
-    return;
-  }
-
+  if (error) { loginError.textContent = "Correo o contraseña incorrectos."; return; }
   mostrarApp();
 });
+btnLogout.addEventListener("click", async () => { await supabaseClient.auth.signOut(); mostrarLogin(); });
+loginPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") btnLogin.click(); });
 
-btnLogout.addEventListener("click", async () => {
-  await supabaseClient.auth.signOut();
-  mostrarLogin();
-});
-
-loginPassword.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") btnLogin.click();
-});
-
-// ================== CIERRE AUTOMATICO POR INACTIVIDAD ==================
 const MINUTOS_INACTIVIDAD = 30;
 let temporizadorInactividad = null;
-
 function reiniciarTemporizadorInactividad() {
-  if (mainApp.style.display === "none") return; // no aplica si no ha logueado
+  if (mainApp.style.display === "none") return;
   clearTimeout(temporizadorInactividad);
   temporizadorInactividad = setTimeout(async () => {
     await supabaseClient.auth.signOut();
     mostrarLogin();
-    loginError.textContent = "Sesion cerrada por inactividad.";
+    loginError.textContent = "Sesión cerrada por inactividad.";
   }, MINUTOS_INACTIVIDAD * 60 * 1000);
 }
+["click", "keydown", "touchstart", "scroll"].forEach((ev) => document.addEventListener(ev, reiniciarTemporizadorInactividad));
 
-["click", "keydown", "touchstart", "scroll"].forEach(evento => {
-  document.addEventListener(evento, reiniciarTemporizadorInactividad);
+// ================== NAVEGACION ==================
+let vistaActual = "hoy";
+
+function ir(vista) {
+  vistaActual = vista;
+  navBtns.forEach((b) => b.classList.toggle("on", b.dataset.vista === vista));
+  cerrarSheet();
+  window.scrollTo(0, 0);
+  if (vista === "hoy") cargarDia(0);
+  else if (vista === "manana") cargarDia(1);
+  else if (vista === "resultados") cargarResultados();
+  else if (vista === "stats") cargarEstadisticas();
+}
+navBtns.forEach((b) => b.addEventListener("click", () => ir(b.dataset.vista)));
+
+// ================== HOJAS (plegables desde abajo) ==================
+let sheetCierre = null;
+
+function cerrarSheet() {
+  sheetRoot.innerHTML = "";
+  document.body.style.overflow = "";
+  sheetCierre = null;
+}
+
+function abrirSheet({ titulo, sub, tagsHtml, body, footer, corto, alCerrar }) {
+  sheetRoot.innerHTML = `<div class="dim" id="sh-dim"></div>
+    <div class="sheet${corto ? " corto" : ""}" id="sh" role="dialog" aria-modal="true" aria-label="${esc(titulo)}">
+      <div class="sh-top" id="sh-top">
+        <div class="grab"></div>
+        <div class="sh-h"><div>${tagsHtml ? `<div class="tags" style="margin-bottom:8px">${tagsHtml}</div>` : ""}<b>${esc(titulo)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div>
+          <button class="ib" id="sh-x" aria-label="Cerrar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      </div>
+      <div class="sh-body" id="sh-body">${body}</div>
+      ${footer ? `<div class="sh-f" id="sh-f">${footer}</div>` : ""}
+    </div>`;
+  document.body.style.overflow = "hidden";
+  sheetCierre = alCerrar || null;
+  const cerrar = () => { const cb = sheetCierre; cerrarSheet(); if (cb) cb(); };
+  $("sh-dim").addEventListener("click", cerrar);
+  $("sh-x").addEventListener("click", cerrar);
+
+  // arrastrar hacia abajo para cerrar (desde la cabecera de la hoja)
+  const sh = $("sh"), top = $("sh-top");
+  let y0 = null, dy = 0;
+  top.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; dy = 0; sh.classList.add("arrastrando"); }, { passive: true });
+  top.addEventListener("touchmove", (e) => {
+    if (y0 === null) return;
+    dy = Math.max(0, e.touches[0].clientY - y0);
+    sh.style.transform = `translate(-50%, ${dy}px)`;
+  }, { passive: true });
+  top.addEventListener("touchend", () => {
+    if (y0 === null) return;
+    sh.classList.remove("arrastrando");
+    if (dy > 90) cerrar(); else sh.style.transform = "";
+    y0 = null;
+  });
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetRoot.innerHTML) { const cb = sheetCierre; cerrarSheet(); if (cb) cb(); } });
+
+// ================== TARJETAS Y ETIQUETAS ==================
+function tagNivel(nivel) {
+  if (nivel === "CONFIABLE") return '<span class="tag t-conf">Confiable</span>';
+  if (nivel === "RADAR_ALTO") return '<span class="tag t-alto">Radar alto</span>';
+  if (nivel === "RADAR") return '<span class="tag t-radar">En el radar</span>';
+  if (nivel === "MUESTRA_INSUFICIENTE") return '<span class="tag t-muted">Poca muestra</span>';
+  return '<span class="tag t-muted">Sin señal</span>';
+}
+const TAG_TRIPLE = '<span class="tag t-triple">Filtro triple</span>';
+const ICO_ARRIBA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6l6 6"/></svg>';
+const ICO_CHECK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B7A55" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10-10"/></svg>';
+const ICO_NO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B42318" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const ICO_NA = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8C94A3" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"/></svg>';
+
+function equipos(p) {
+  const i = (p.partido || "").indexOf(" vs ");
+  return i < 0 ? [p.partido, ""] : [p.partido.slice(0, i), p.partido.slice(i + 4)];
+}
+
+// Fila de un equipo con su minigrafica (goles totales de cada uno de sus ultimos 6
+// partidos por localia; linea punteada = 2.5; verde sobre 2.5, rojo bajo 2.5).
+function filaEquipo(nombre, ctx, anota, recibe, serie) {
+  const totales = Array.isArray(serie) ? serie.map((x) => x.total) : [];
+  const conGrafica = totales.length >= 2;
+  const over = totales.filter((t) => t >= 3).length;
+  const cls = conGrafica ? (over / totales.length >= 4 / 6 - 1e-9 ? "hi" : "lo") : "";
+  return `<div class="tm">
+    <div class="who"><b>${esc(nombre)}</b><small>${esc(ctx)}</small><small>Anota ${fmt(anota, 2)}, recibe ${fmt(recibe, 2)}</small></div>
+    ${conGrafica ? graficaSplit(totales, 2.5, { W: 92, H: 40, aria: `Goles totales de los ultimos ${totales.length} partidos de ${nombre}` }) : "<span></span>"}
+    <span class="val ${cls}">${conGrafica ? `${over}/${totales.length}` : "--"}</span>
+  </div>`;
+}
+
+function etiquetaRegla(p) { return p.regla_tipo === "cuota" ? "Histórico de la cuota" : "Histórico de la confianza"; }
+
+function metricas(p) {
+  return `<div class="metrics">
+    <div class="cell"><small>Probabilidad</small><strong>${fmt(p.probabilidad * 100)}%</strong></div>
+    <div class="cell"><small>Cuota Over 2.5</small><strong>${fmt(p.cuota, 2)}</strong></div>
+    <div class="cell"><small>${etiquetaRegla(p)}</small><strong>${p.regla_pct !== null && p.regla_pct !== undefined ? fmt(p.regla_pct) + "%" : "--"}</strong></div>
+    <div class="cell"><small>Goles esperados</small><strong>${p.goles_esperados !== null && p.goles_esperados !== undefined ? fmt(p.goles_esperados, 2) : "--"}</strong></div>
+  </div>`;
+}
+
+// ================== HOY / MAÑANA ==================
+let diaOffset = 0;
+let picksDia = [];
+let combMetodoDia = null;
+let miCombDia = null;
+let seleccion = [];
+
+async function cargarDia(off) {
+  diaOffset = off;
+  seleccion = [];
+  builderSlot.innerHTML = "";
+  const fecha = hoyISO(off);
+  vistaEl.innerHTML = titulo(off === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true) + '<div class="cargando">Cargando...</div>';
+  bindAnalizar();
+
+  const [pk, cm, mc] = await Promise.all([
+    supabaseClient.from("picks").select("*").gte("fecha_partido", fecha + "T00:00:00-05:00").lte("fecha_partido", fecha + "T23:59:59-05:00").order("fecha_partido", { ascending: true }),
+    supabaseClient.from("combinada_dia").select("*").eq("fecha", fecha).maybeSingle(),
+    supabaseClient.from("mi_combinada").select("*").eq("fecha", fecha).maybeSingle(),
+  ]);
+  if (vistaActual !== (off === 0 ? "hoy" : "manana")) return; // el usuario ya cambio de pantalla
+  if (pk.error) {
+    vistaEl.innerHTML = titulo(off === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true) + `<div class="vacio">Error leyendo picks: ${esc(pk.error.message)}</div>`;
+    bindAnalizar();
+    return;
+  }
+  picksDia = (pk.data || []).filter(esSenal);
+  combMetodoDia = !cm.error && cm.data && !cm.data.mensaje ? cm.data : null;
+  miCombDia = !mc.error && mc.data ? mc.data : null;
+  renderDia();
+}
+
+function titulo(t, sub, conAnalizar) {
+  return `<div class="ttl"><div><h1>${esc(t)}</h1><p>${esc(sub)}</p></div>${conAnalizar ? '<button class="btn-s" id="btn-analizar">Analizar ahora</button>' : ""}</div>${conAnalizar ? '<p class="estado-analisis" id="analizar-mensaje"></p>' : ""}`;
+}
+
+function yaEmpezo(p) { return new Date(p.fecha_partido).getTime() <= Date.now(); }
+function estaEnMiCombinada(p) {
+  return !!(miCombDia && (miCombDia.patas || []).some((x) => x.liga_id === p.liga_id && x.partido === p.partido));
+}
+
+function botonAgregar(p, ctx) {
+  const attr = ctx === "hoja" ? `data-add-hoja="${p.id}"` : `data-add="${p.id}"`;
+  if (miCombDia) return estaEnMiCombinada(p) ? '<button class="pickb fijo" disabled>En mi combinada</button>' : "<span></span>";
+  if (yaEmpezo(p)) return '<button class="pickb fijo" disabled>Ya empezó</button>';
+  if (seleccion.some((x) => x.id === p.id)) return `<button class="pickb on" ${attr}>Agregado</button>`;
+  if (seleccion.length >= 2) return `<button class="pickb" disabled>Agregar</button>`;
+  return `<button class="pickb" ${attr}>Agregar</button>`;
+}
+
+function renderDia() {
+  const fecha = hoyISO(diaOffset);
+  const nTriple = picksDia.filter((p) => p.cumple_filtro_triple === true).length;
+  let html = titulo(diaOffset === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true);
+
+  if (picksDia.length === 0) {
+    html += `<div class="vacio">Todavía no hay partidos con señal para este día. El análisis corre cada noche y puedes lanzarlo con "Analizar ahora".</div>`;
+    vistaEl.innerHTML = html;
+    bindAnalizar();
+    renderBuilder();
+    return;
+  }
+
+  html += `<div class="sec" style="padding-top:14px"><h2>${picksDia.length} partido${picksDia.length === 1 ? "" : "s"} con señal</h2><span>${nTriple} cumple${nTriple === 1 ? "" : "n"} el filtro triple</span></div>`;
+
+  // --- combinada del metodo ---
+  if (combMetodoDia) {
+    const patas = combMetodoDia.picks || [];
+    html += `<div class="card"><div class="card-h"><h3>Combinada del método</h3><span>${patas.length} patas, cuota total ${fmt(combMetodoDia.cuota_total, 2)}</span></div>
+      ${patas.map((x) => `<div class="legs"><span>${esc(x.partido)}</span><b style="font-weight:600">${fmt(x.cuota_over25, 2)}</b></div>`).join("")}
+      <div class="legs resumen"><span>Criterio usado</span><b style="font-weight:500">${combMetodoDia.criterio_usado === "filtro_triple" ? "Filtro triple" : "Normal"}</b></div></div>`;
+  } else {
+    html += `<div class="card"><div class="card-h"><h3>Combinada del método</h3><span>sin combinada todavía</span></div></div>`;
+  }
+
+  // --- mi combinada confirmada ---
+  if (miCombDia) {
+    const patas = miCombDia.patas || [];
+    html += `<div class="card fuerte"><div class="card-h"><h3>Mi combinada</h3><span>confirmada ${horaCol(miCombDia.confirmada_en)}</span></div>
+      ${patas.map((x) => `<div class="legs"><span>${esc(x.partido)}</span><b style="font-weight:600">${fmt(x.cuota, 2)}</b></div>`).join("")}
+      <div class="legs resumen"><span>Cuota total</span><b style="font-weight:600">${fmt(miCombDia.cuota_total, 2)}</b></div></div>`;
+  }
+
+  // --- partidos agrupados por liga ---
+  const porLiga = {};
+  picksDia.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
+  html += `<div class="sec" style="padding-bottom:8px"><h2>Partidos</h2><span>agrupados por liga</span></div>`;
+  Object.keys(porLiga).sort().forEach((liga) => {
+    html += `<div class="band">${esc(liga)}</div>`;
+    porLiga[liga].forEach((p) => {
+      const [loc, vis] = equipos(p);
+      const triple = p.cumple_filtro_triple === true;
+      html += `<div class="match${triple ? " triple" : ""}" data-abrir="${p.id}" tabindex="0">
+        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}<span class="hora">${horaCol(p.fecha_partido)}</span></div>
+        <div class="teams"><b>${esc(p.partido)}</b></div>
+        <div style="margin-top:6px">
+          ${filaEquipo(loc, "Local, últimos 6 de local", p.forma_local_anota, p.forma_local_recibe, p.ultimos_local)}
+          ${filaEquipo(vis, "Visitante, últimos 6 de visitante", p.forma_visita_anota, p.forma_visita_recibe, p.ultimos_visita)}
+        </div>
+        ${metricas(p)}
+        <div class="mrow"><span class="ver">Ver análisis completo ${ICO_ARRIBA}</span>${botonAgregar(p, "lista")}</div>
+      </div>`;
+    });
+  });
+  html += `<div class="foot">Análisis pre-partido. No garantiza resultados. La gestión de la banca es tu responsabilidad.<br>Diseñado y creado por Jose Torres.</div>`;
+  vistaEl.innerHTML = html;
+  bindAnalizar();
+  renderBuilder();
+}
+
+// clics dentro de la lista de partidos
+vistaEl.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-add]");
+  if (add) { e.stopPropagation(); alternarSeleccion(parseInt(add.dataset.add, 10)); return; }
+  const card = e.target.closest("[data-abrir]");
+  if (card) abrirPartido(parseInt(card.dataset.abrir, 10));
+  const liga = e.target.closest("[data-liga]");
+  if (liga) abrirLiga(liga.dataset.liga);
+  const dia = e.target.closest("[data-dia]");
+  if (dia) { diaResultadoActivo = dia.dataset.dia; renderResultados(); }
+  const f = e.target.closest("[data-filtro]");
+  if (f) { filtroDias = f.dataset.filtro; renderEstadisticas(); }
 });
+vistaEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const card = e.target.closest && e.target.closest("[data-abrir]");
+  if (card && e.target === card) abrirPartido(parseInt(card.dataset.abrir, 10));
+});
+
+function alternarSeleccion(id) {
+  const p = picksDia.find((x) => x.id === id);
+  if (!p || miCombDia || yaEmpezo(p)) return;
+  const i = seleccion.findIndex((x) => x.id === id);
+  if (i >= 0) seleccion.splice(i, 1);
+  else if (seleccion.length < 2) seleccion.push(p);
+  const y = window.scrollY;
+  renderDia();
+  window.scrollTo(0, y);
+}
+
+// ---------- barra de Mi combinada ----------
+function cuotaTotalSel() { return seleccion.length === 2 ? Math.round(seleccion[0].cuota * seleccion[1].cuota * 100) / 100 : null; }
+
+function renderBuilder() {
+  if (miCombDia || seleccion.length === 0 || (vistaActual !== "hoy" && vistaActual !== "manana")) { builderSlot.innerHTML = ""; return; }
+  const total = cuotaTotalSel();
+  const enObjetivo = total !== null && total >= OBJETIVO_MIN && total <= OBJETIVO_MAX;
+  builderSlot.innerHTML = `<div class="bld">
+    <div class="l"><b style="font-weight:600">Mi combinada</b><span style="flex:0 0 auto">${seleccion.length} de 2 patas</span></div>
+    ${seleccion.map((p) => `<div class="l"><span>${esc(p.partido)}</span><b style="font-weight:600;flex:0 0 auto">${fmt(p.cuota, 2)}<button data-quitar="${p.id}">Quitar</button></b></div>`).join("")}
+    <div class="t"><div><small>Cuota total</small><br><strong>${total !== null ? fmt(total, 2) : "--"}</strong></div>
+      <small>${total === null ? "Elige 2 partidos" : enObjetivo ? `Dentro del objetivo ${fmt(OBJETIVO_MIN, 2)} a ${fmt(OBJETIVO_MAX, 2)}` : `Fuera del objetivo ${fmt(OBJETIVO_MIN, 2)} a ${fmt(OBJETIVO_MAX, 2)}`}</small></div>
+    <button class="btn" id="btn-confirmar-abrir" ${seleccion.length < 2 ? "disabled" : ""}>Confirmar apuesta</button>
+  </div>`;
+  builderSlot.querySelectorAll("[data-quitar]").forEach((b) => b.addEventListener("click", () => alternarSeleccion(parseInt(b.dataset.quitar, 10))));
+  const bc = $("btn-confirmar-abrir");
+  if (bc) bc.addEventListener("click", abrirConfirmar);
+}
+
+function probEstimada(picks) {
+  const pcts = picks.map((p) => p.regla_pct);
+  if (pcts.some((x) => x === null || x === undefined)) return null;
+  return Math.round(((pcts[0] * pcts[1]) / 100) * 10) / 10;
+}
+
+function abrirConfirmar() {
+  if (seleccion.length !== 2) return;
+  const total = cuotaTotalSel();
+  const prob = probEstimada(seleccion);
+  const equil = 100 / total;
+  const body = `<div class="blk" style="padding-top:8px">
+      ${seleccion.map((p) => `<div class="legs" style="padding-left:0;padding-right:0"><div><b style="font-weight:600">${esc(p.partido)}</b><br><span style="font-size:12px">Over 2.5, ${horaCol(p.fecha_partido)}</span></div><b style="font-weight:600">${fmt(p.cuota, 2)}</b></div>`).join("")}
+    </div>
+    <div class="g3" style="margin-top:12px">
+      <div><small>Cuota total</small><b>${fmt(total, 2)}</b></div>
+      <div><small>Prob. estimada</small><b>${prob !== null ? fmt(prob) + "%" : "--"}</b></div>
+      <div><small>Equilibrio</small><b>${fmt(equil)}%</b></div>
+    </div>
+    <p class="note note-pad">La probabilidad estimada multiplica el acierto histórico de la regla de cada pata.${prob !== null && prob < equil ? " Está por debajo del equilibrio: según el método, esta combinada pierde a largo plazo." : ""}</p>
+    <div class="blk" style="margin-top:14px"><div class="warn">Al confirmar, la apuesta queda guardada y no se puede editar ni borrar. Es la que se mide contra la combinada del método.</div>
+    <p class="err" id="confirmar-error"></p></div>`;
+  abrirSheet({
+    titulo: "Confirmar apuesta", sub: `Tu combinada de ${diaOffset === 0 ? "hoy" : "mañana"}, ${etiquetaDiaLarga(hoyISO(diaOffset))}`, body, corto: true,
+    footer: '<button class="btn" id="btn-confirmar">Confirmar apuesta</button><button class="btn2" id="btn-seguir">Seguir editando</button>',
+  });
+  $("btn-seguir").addEventListener("click", cerrarSheet);
+  $("btn-confirmar").addEventListener("click", () => confirmarApuesta(prob));
+}
+
+async function confirmarApuesta(prob) {
+  const btn = $("btn-confirmar"), errEl = $("confirmar-error");
+  btn.disabled = true; btn.textContent = "Guardando...";
+  errEl.textContent = "";
+  const patas = seleccion.map((p) => ({ liga_id: p.liga_id, partido: p.partido, fecha_partido: p.fecha_partido, cuota: Number(p.cuota) }));
+  const { error } = await supabaseClient.from("mi_combinada").insert({ patas, probabilidad_estimada: prob });
+  if (error) {
+    btn.disabled = false; btn.textContent = "Confirmar apuesta";
+    const m = error.message || "";
+    errEl.textContent = /duplicate|unique/i.test(m) ? "Ya confirmaste una combinada para este día. No se puede tener otra." : "No se pudo guardar: " + m;
+    return;
+  }
+  cerrarSheet();
+  await cargarDia(diaOffset); // recarga: ahora aparece confirmada y los botones quedan bloqueados
+}
+
+// ---------- Hoja de detalle del partido ----------
+function bloqueEquipo(nombre, ctx, serie, anota, recibe) {
+  if (!Array.isArray(serie) || serie.length === 0) {
+    return `<div class="blk team-blk"><div class="cab"><b>${esc(nombre)}</b></div><div class="sub">${esc(ctx)}. Sin detalle guardado para este partido (se llena en los análisis nuevos).</div></div>`;
+  }
+  const tot = serie.map((x) => x.total);
+  const over = tot.filter((t) => t >= 3).length;
+  const filas = serie.map((x) => `<div class="gm"><span>${esc(x.rival)}<br><small style="color:${C.apagado};font-size:12px">${fechaCorta(x.fecha)}</small></span><span class="r">${x.favor} - ${x.contra}</span><span class="r">${x.total}</span><span class="ov ${x.total >= 3 ? "o" : "u"}">${x.total >= 3 ? "Over" : "Under"}</span></div>`).join("");
+  const grafica = tot.length >= 2 ? graficaSplit(tot, 2.5, { W: 350, H: 120, lo: 0, hi: Math.max(8, ...tot) + 1, yt: [0, 2.5, 5, 8], padr: 40, xl: [[0, "más antiguo"], [tot.length - 1, "último"]], aria: `Goles totales de ${nombre}` }) : "";
+  return `<div class="blk team-blk"><div class="cab"><b>${esc(nombre)}</b><span>${over} de ${tot.length} Over</span></div>
+    <div class="sub">${esc(ctx)}. Anota ${fmt(anota, 2)} y recibe ${fmt(recibe, 2)} en promedio.</div>
+    ${grafica}
+    <div class="gm h"><span>Rival</span><span class="r">Marcador</span><span class="r">Goles</span><span class="r">Resultado</span></div>${filas}</div>`;
+}
+
+function abrirPartido(id) {
+  const p = picksDia.find((x) => x.id === id);
+  if (!p) return;
+  const [loc, vis] = equipos(p);
+  const equil = 100 / Number(p.cuota);
+  const triple = p.cumple_filtro_triple === true;
+
+  // condiciones del filtro triple. El % historico de la TABLA DE CUOTA no se guarda por
+  // separado: solo se conoce si la regla que decidio el nivel fue la de cuota.
+  const cProb = p.probabilidad * 100 >= 60;
+  const cGoles = p.goles_esperados !== null && p.goles_esperados !== undefined ? p.goles_esperados > 3.0 : null;
+  let cCuota = null, vCuota = "--";
+  if (triple) { cCuota = true; vCuota = p.regla_tipo === "cuota" ? fmt(p.regla_pct) + "%" : "mín. 60%"; }
+  else if (p.regla_tipo === "cuota") { cCuota = p.regla_pct >= 60; vCuota = fmt(p.regla_pct) + "%"; }
+  const chk = (ok, txt, val) => `<div class="chk"><i>${ok === null ? ICO_NA : ok ? ICO_CHECK : ICO_NO}</i><span>${txt}</span><b>${val}</b></div>`;
+  const nCumple = [cProb, cGoles, cCuota].filter((x) => x === true).length;
+
+  const body = `
+    <h3 class="h3">Lo que decide el método</h3>
+    <div class="blk">
+      <div class="metrics" style="margin-top:0">
+        <div class="cell"><small>Probabilidad</small><strong>${fmt(p.probabilidad * 100)}%</strong></div>
+        <div class="cell"><small>Cuota Over 2.5</small><strong>${fmt(p.cuota, 2)}</strong></div>
+        <div class="cell"><small>Equilibrio</small><strong>${fmt(equil)}%</strong></div>
+        <div class="cell"><small>Goles esperados</small><strong>${p.goles_esperados !== null && p.goles_esperados !== undefined ? fmt(p.goles_esperados, 2) : "--"}</strong></div>
+      </div>
+      <p class="note">El equilibrio es el acierto mínimo que exige esta cuota para no perder dinero (1 dividido entre la cuota).</p>
+      <div style="margin-top:12px">
+        <div class="row"><span>Regla que decidió el nivel</span><b>${p.regla_tipo === "cuota" ? "Tabla de cuota" : p.regla_tipo === "confianza" ? "Tabla de confianza" : "--"}</b></div>
+        <div class="row"><span>Acierto histórico de esa regla</span><b>${p.regla_pct !== null && p.regla_pct !== undefined ? fmt(p.regla_pct) + "%" : "--"}, N ${p.regla_n !== null && p.regla_n !== undefined ? p.regla_n : "--"}</b></div>
+        <div class="row"><span>Valor vs mercado</span><b class="${claseSigno(p.valor_vs_mercado)}">${p.valor_vs_mercado !== null && p.valor_vs_mercado !== undefined ? signo(p.valor_vs_mercado * 100) + " pp" : "--"}</b></div>
+        <div class="row"><span>Goles esperados contra la mediana de la liga</span><b>${p.goles_esperados !== null && p.goles_esperados !== undefined ? fmt(p.goles_esperados, 2) : "--"} contra ${p.mediana_goles_liga !== null && p.mediana_goles_liga !== undefined ? fmt(p.mediana_goles_liga, 2) : "--"}</b></div>
+      </div>
+    </div>
+    <h3 class="h3">Filtro triple<small>${triple ? "cumple" : `${nCumple} de 3 condiciones comprobables`}</small></h3>
+    <div class="blk">
+      ${chk(cProb, "Probabilidad del modelo, mínimo 60%", fmt(p.probabilidad * 100) + "%")}
+      ${chk(cCuota, "Histórico de la tabla de cuota, mínimo 60%", vCuota)}
+      ${chk(cGoles, "Goles esperados, más de 3.0", p.goles_esperados !== null && p.goles_esperados !== undefined ? fmt(p.goles_esperados, 2) : "--")}
+    </div>
+    <h3 class="h3">Contexto<small>no decide, solo informa</small></h3>
+    ${bloqueEquipo(loc, "Como local", p.ultimos_local, p.forma_local_anota, p.forma_local_recibe)}
+    ${bloqueEquipo(vis, "Como visitante", p.ultimos_visita, p.forma_visita_anota, p.forma_visita_recibe)}
+    <h3 class="h3">Enfrentamientos directos</h3>
+    <div class="blk">${Array.isArray(p.h2h) && p.h2h.length ? `<div class="gm h"><span>Partido</span><span class="r">Marcador</span><span class="r">Goles</span><span class="r">Resultado</span></div>` + p.h2h.map((x) => `<div class="gm"><span>${fechaCorta(x.fecha)}<br><small style="color:${C.apagado};font-size:12px">${esc(x.local)} vs ${esc(x.visita)}</small></span><span class="r">${x.goles_local} - ${x.goles_visita}</span><span class="r">${x.total}</span><span class="ov ${x.total >= 3 ? "o" : "u"}">${x.total >= 3 ? "Over" : "Under"}</span></div>`).join("") : '<div class="vacio" style="margin:0">Sin enfrentamientos directos registrados.</div>'}</div>
+    <h3 class="h3">Mercado</h3>
+    <div class="blk"><div class="row" style="border-top:0"><span>BTTS del mercado (justo)</span><b>${p.btts_mercado_pct !== null && p.btts_mercado_pct !== undefined ? fmt(p.btts_mercado_pct) + "%" : "--"}</b></div>
+      <div class="row"><span>Margen del mercado</span><b>${p.vig_mercado_pct !== null && p.vig_mercado_pct !== undefined ? fmt(p.vig_mercado_pct) + "%" : "--"}</b></div></div>`;
+
+  const footer = () => `<div id="sh-foot-btn">${botonAgregarHoja(p)}</div>`;
+  abrirSheet({
+    titulo: p.partido, sub: `${p.liga_nombre}, ${horaCol(p.fecha_partido)}`,
+    tagsHtml: tagNivel(p.nivel) + (triple ? TAG_TRIPLE : ""), body, footer: footer(),
+  });
+  enlazarBotonHoja(p);
+}
+
+function botonAgregarHoja(p) {
+  if (miCombDia) return estaEnMiCombinada(p) ? '<button class="btn" disabled>En mi combinada</button>' : '<button class="btn" disabled>Ya confirmaste tu combinada de este día</button>';
+  if (yaEmpezo(p)) return '<button class="btn" disabled>El partido ya empezó</button>';
+  if (seleccion.some((x) => x.id === p.id)) return '<button class="btn2" style="margin-top:0" data-add-hoja="' + p.id + '">Quitar de mi combinada</button>';
+  if (seleccion.length >= 2) return '<button class="btn" disabled>Ya tienes 2 patas, quita una primero</button>';
+  return '<button class="btn" data-add-hoja="' + p.id + '">Agregar a mi combinada</button>';
+}
+function enlazarBotonHoja(p) {
+  const b = document.querySelector("[data-add-hoja]");
+  if (!b) return;
+  b.addEventListener("click", () => {
+    alternarSeleccion(p.id);
+    const cont = $("sh-foot-btn");
+    if (cont) { cont.innerHTML = botonAgregarHoja(p); enlazarBotonHoja(p); }
+  });
+}
 
 // ================== BOTON ANALIZAR AHORA ==================
-const btnAnalizar = document.getElementById("btn-analizar");
-const analizarMensaje = document.getElementById("analizar-mensaje");
-
 let pollingAnalisis = null;
-
-btnAnalizar.addEventListener("click", async () => {
-  if (pollingAnalisis) clearInterval(pollingAnalisis); // por si le da doble clic
-
-  btnAnalizar.disabled = true;
-  btnAnalizar.textContent = "Iniciando...";
-  analizarMensaje.textContent = "";
-
-  const { data, error } = await supabaseClient.functions.invoke("run-analysis");
-
-  if (error || (data && data.ok === false)) {
-    btnAnalizar.disabled = false;
-    btnAnalizar.textContent = "Analizar ahora";
-    analizarMensaje.textContent = "Error al iniciar. Intenta de nuevo.";
-    return;
-  }
-
-  // El analisis corre en GitHub Actions en segundo plano (tarda varios
-  // minutos) -- en vez de dejar un mensaje estatico y que el usuario tenga
-  // que salir y volver a entrar, la app pregunta sola cada 15 segundos si
-  // ya hay picks nuevos guardados despues del momento en que se dio clic,
-  // y se actualiza sola apenas los encuentra (o despues de 5 minutos, lo
-  // que pase primero).
-  const momentoClick = new Date().toISOString();
-  let intentos = 0;
-  const maxIntentos = 20; // 20 x 15s = 5 minutos
-
-  btnAnalizar.textContent = "Analizando...";
-  analizarMensaje.textContent = "Análisis en curso — la app se va a actualizar sola cuando termine.";
-
-  pollingAnalisis = setInterval(async () => {
-    intentos++;
-    const { data: nuevos } = await supabaseClient
-      .from("picks")
-      .select("id")
-      .gt("actualizado_en", momentoClick)
-      .limit(1);
-
-    const yaTermino = nuevos && nuevos.length > 0;
-
-    if (yaTermino || intentos >= maxIntentos) {
-      clearInterval(pollingAnalisis);
-      pollingAnalisis = null;
-      btnAnalizar.disabled = false;
-      btnAnalizar.textContent = "Analizar ahora";
-      analizarMensaje.textContent = yaTermino
-        ? "¡Listo! Partidos actualizados."
-        : "Sigue tardando más de lo normal -- entra en un rato y dale refrescar.";
-      cargarPicks(diaActivo); // refresca automatico la vista actual
-    } else {
-      analizarMensaje.textContent = `Analizando... (${intentos}/${maxIntentos})`;
+function bindAnalizar() {
+  const btn = $("btn-analizar"), msg = $("analizar-mensaje");
+  if (!btn) return;
+  if (pollingAnalisis) { btn.disabled = true; btn.textContent = "Analizando..."; }
+  btn.addEventListener("click", async () => {
+    if (pollingAnalisis) clearInterval(pollingAnalisis);
+    btn.disabled = true; btn.textContent = "Iniciando..."; msg.textContent = "";
+    const { data, error } = await supabaseClient.functions.invoke("run-analysis");
+    if (error || (data && data.ok === false)) {
+      btn.disabled = false; btn.textContent = "Analizar ahora";
+      msg.textContent = "Error al iniciar. Intenta de nuevo.";
+      return;
     }
-  }, 15000);
-});
-
-// ================== TABS ==================
-tabs.forEach(tab => {
-  tab.addEventListener("click", () => {
-    tabs.forEach(t => t.classList.remove("tab-activo"));
-    tab.classList.add("tab-activo");
-
-    if (tab.dataset.vista === "stats") {
-      cargarEstadisticas();
-    } else if (tab.dataset.vista === "resultados") {
-      cargarResultados();
-    } else {
-      diaActivo = parseInt(tab.dataset.dia);
-      cargarPicks(diaActivo);
-    }
+    const momentoClick = new Date().toISOString();
+    let intentos = 0;
+    const maxIntentos = 20; // 20 x 15 s = 5 minutos
+    btn.textContent = "Analizando...";
+    msg.textContent = "Análisis en curso. La pantalla se actualiza sola cuando termine.";
+    pollingAnalisis = setInterval(async () => {
+      intentos++;
+      const { data: nuevos } = await supabaseClient.from("picks").select("id").gt("actualizado_en", momentoClick).limit(1);
+      const yaTermino = nuevos && nuevos.length > 0;
+      const b2 = $("btn-analizar"), m2 = $("analizar-mensaje");
+      if (yaTermino || intentos >= maxIntentos) {
+        clearInterval(pollingAnalisis); pollingAnalisis = null;
+        if (b2) { b2.disabled = false; b2.textContent = "Analizar ahora"; }
+        if (vistaActual === "hoy" || vistaActual === "manana") {
+          await cargarDia(diaOffset);
+          const m3 = $("analizar-mensaje");
+          if (m3) m3.textContent = yaTermino ? "Listo. Partidos actualizados." : "Sigue tardando más de lo normal. Entra en un rato y vuelve a revisar.";
+        }
+      } else if (m2) {
+        m2.textContent = `Analizando... (${intentos}/${maxIntentos})`;
+      }
+    }, 15000);
   });
-});
-
-// ================== ESTADISTICAS ==================
-let chartInstances = {};
-let ligaAbierta = null;
-
-function dibujarChart(id, config) {
-  if (chartInstances[id]) chartInstances[id].destroy();
-  const el = document.getElementById(id);
-  if (!el) return;
-  chartInstances[id] = new Chart(el, config);
 }
 
-const COLOR_CONFIABLE = "#22c55e";
-const COLOR_RADAR_ALTO = "#86efac";
-const COLOR_RADAR = "#eab308";
-const COLOR_GANO = "#22c55e";
-const COLOR_FALLO = "#ef4444";
-const COLOR_PENDIENTE = "#cbd5e1";
-const COLOR_VALOR = "#2563eb";
-const COLOR_NEUTRO = "#94a3b8";
-
-const OPCIONES_BASE_CHART = {
-  responsive: true,
-  maintainAspectRatio: false,
-  layout: { padding: { right: 46 } },
-  plugins: { legend: { display: false } },
-  scales: {
-    x: { grid: { color: "#f1f5f9" }, ticks: { font: { size: 11 } } },
-    y: { grid: { display: false }, ticks: { font: { size: 11.5 } } },
-  },
-};
-
-// ---------- Aro de progreso (KPI circular, SVG puro) ----------
-function svgAro(pct, color, tamano, grosor) {
-  tamano = tamano || 96;
-  grosor = grosor || 10;
-  const r = (tamano - grosor) / 2;
-  const c = 2 * Math.PI * r;
-  const p = Math.max(0, Math.min(100, pct));
-  const relleno = (p / 100) * c;
-  return `<svg width="${tamano}" height="${tamano}" viewBox="0 0 ${tamano} ${tamano}">
-    <circle cx="${tamano / 2}" cy="${tamano / 2}" r="${r}" fill="none" stroke="#f1f5f9" stroke-width="${grosor}" />
-    <circle cx="${tamano / 2}" cy="${tamano / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${grosor}"
-      stroke-dasharray="${relleno} ${c}" stroke-linecap="round"
-      transform="rotate(-90 ${tamano / 2} ${tamano / 2})" />
-  </svg>`;
-}
-
-function aroConNumero(pct, color, etiqueta, tamano) {
-  tamano = tamano || 96;
-  return `<div class="aro-wrap">${svgAro(pct, color, tamano)}
-    <div class="aro-numero" style="font-size:${Math.round(tamano * 0.22)}px">${pct}%${etiqueta ? `<span>${etiqueta}</span>` : ""}</div>
-  </div>`;
-}
-
-async function cargarEstadisticas() {
-  comboResultadoDiv.innerHTML = "";
-  resultadosDiv.innerHTML = `<div class="info-card">Cargando estadisticas...</div>`;
-
-  const [picksRes, comboRes] = await Promise.all([
-    supabaseClient
-      .from("picks")
-      .select("liga_nombre, nivel, resultado, fecha_partido, sobre_mediana_liga, partido, goles_local_final, goles_visita_final, cumple_filtro_triple")
-      .not("resultado", "is", null),
-    supabaseClient
-      .from("combinada_resultados")
-      .select("fecha, resultado_combinada, cuota_total"),
-  ]);
-
-  if (picksRes.error) {
-    resultadosDiv.innerHTML = `<div class="info-card">Error: ${picksRes.error.message}</div>`;
-    return;
-  }
-
-  if (!picksRes.data || picksRes.data.length === 0) {
-    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay picks verificados. Esto se va llenando solo, dia a dia, a medida que se juegan los partidos.</div>`;
-    return;
-  }
-
-  const combos = (!comboRes.error && comboRes.data) ? comboRes.data : null;
-  mostrarEstadisticas(picksRes.data, combos);
-}
-
-function resumenAcierto(filas) {
-  const total = filas.length;
-  const aciertos = filas.filter(f => f.resultado === true).length;
-  const pct = total > 0 ? (100 * aciertos / total).toFixed(1) : "0.0";
-  return { total, aciertos, fallos: total - aciertos, pct };
-}
-
-function mostrarEstadisticas(filas, combos) {
-  ligaAbierta = null;
-  let html = "";
-
-  // ---------- Resumen general (aro de progreso) ----------
-  const general = resumenAcierto(filas);
-  html += `<div class="stats-card stats-general stats-general-aro">
-    ${aroConNumero(parseFloat(general.pct), COLOR_CONFIABLE, null, 100)}
-    <div>
-      <p class="stats-titulo">Resumen general</p>
-      <p class="stats-detalle">${general.aciertos} aciertos de ${general.total} picks verificados</p>
-      <p class="stats-detalle">${general.fallos} fallos</p>
-    </div>
-  </div>`;
-
-  // ---------- Por nivel de confianza ----------
-  const nivelesOrden = ["CONFIABLE", "RADAR_ALTO", "RADAR"];
-  const nivelesTexto = { CONFIABLE: "Confiable", RADAR_ALTO: "Alto (poca muestra)", RADAR: "En el radar" };
-  const nivelesColor = { CONFIABLE: COLOR_CONFIABLE, RADAR_ALTO: COLOR_RADAR_ALTO, RADAR: COLOR_RADAR };
-  const datosNivel = nivelesOrden
-    .map(niv => ({ niv, r: resumenAcierto(filas.filter(f => f.nivel === niv)) }))
-    .filter(d => d.r.total > 0);
-
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Acierto por nivel de confianza</span>
-      <span class="stats-section-subtitulo">${datosNivel.reduce((s, d) => s + d.r.total, 0)} picks</span>
-    </div>
-    <div class="chart-card"><div class="chart-wrap medio"><canvas id="chart-nivel"></canvas></div></div>
-    <p class="stats-nota">El nivel Confiable deberia acertar mas seguido que Radar por diseno -- si con el tiempo dejan de verse asi de separados, es una senal para revisar.</p>
-  </div>`;
-
-  // ---------- Por liga ----------
-  const porLiga = {};
-  filas.forEach(f => {
-    if (!porLiga[f.liga_nombre]) porLiga[f.liga_nombre] = [];
-    porLiga[f.liga_nombre].push(f);
-  });
-  const datosLiga = Object.keys(porLiga)
-    .map(liga => ({ liga, r: resumenAcierto(porLiga[liga]) }))
-    .sort((a, b) => parseFloat(b.r.pct) - parseFloat(a.r.pct));
-
-  const altoLiga = Math.max(160, datosLiga.length * 30);
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Acierto por liga</span>
-      <span class="stats-section-subtitulo">${datosLiga.length} ligas con datos</span>
-    </div>
-    <p class="stats-ayuda">Toca una barra para ver los partidos de esa liga, con marcador</p>
-    <div class="chart-card clicable"><div class="chart-wrap" style="height:${altoLiga}px"><canvas id="chart-liga"></canvas></div></div>
-    <div id="detalle-liga-panel"></div>
-  </div>`;
-
-  // ---------- Evolucion en el tiempo ----------
-  const porSemana = {};
-  filas.forEach(f => {
-    if (!f.fecha_partido) return;
-    const d = new Date(f.fecha_partido);
-    const inicioSemana = new Date(d);
-    inicioSemana.setUTCDate(d.getUTCDate() - d.getUTCDay());
-    const clave = inicioSemana.toISOString().split("T")[0];
-    if (!porSemana[clave]) porSemana[clave] = [];
-    porSemana[clave].push(f);
-  });
-  const semanasOrdenadas = Object.keys(porSemana).sort();
-
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Evolucion del acierto semana a semana</span>
-    </div>`;
-  if (semanasOrdenadas.length < 2) {
-    html += `<div class="chart-card-vacio">Todavia no hay suficientes semanas de datos verificados para dibujar la evolucion -- esto se va a ir llenando solo.</div>`;
-  } else {
-    html += `<div class="chart-card"><div class="chart-wrap alto"><canvas id="chart-evolucion"></canvas></div></div>`;
-  }
-  html += `</div>`;
-
-  // ---------- Combinada del dia ----------
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Combinada del dia</span>
-    </div>`;
-  if (!combos || combos.length === 0) {
-    html += `<div class="chart-card-vacio">Todavia no hay combinadas verificadas, o la vista "combinada_resultados" no esta creada en Supabase.</div>`;
-  } else {
-    const resueltas = combos.filter(c => c.resultado_combinada !== "PENDIENTE");
-    const ganadas = combos.filter(c => c.resultado_combinada === "GANO_COMPLETA").length;
-    const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
-    const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
-    const pctCombo = resueltas.length > 0 ? (100 * ganadas / resueltas.length) : 0;
-
-    html += `<div class="stats-card stats-general stats-combo stats-general-aro">
-      ${aroConNumero(parseFloat(pctCombo.toFixed(1)), COLOR_VALOR, null, 100)}
-      <div>
-        <p class="stats-titulo">Acierto historico de la combinada de 2 patas</p>
-        <p class="stats-detalle">${ganadas} ganadas completas de ${resueltas.length} verificadas</p>
-        <p class="stats-detalle">${falladas} fallidas, ${pendientes} pendientes</p>
-      </div>
-    </div>`;
-    html += `<div class="chart-card"><div class="chart-wrap medio"><canvas id="chart-combo"></canvas></div></div>`;
-  }
-  html += `</div>`;
-
-  // ---------- Fin de semana (sabado y domingo) ----------
-  function diaSemanaColombia(ts) {
-    const d = new Date(new Date(ts).getTime() - 5 * 60 * 60 * 1000);
-    return d.getUTCDay(); // 0=Domingo ... 6=Sabado
-  }
-  const conFecha = filas.filter(f => f.fecha_partido);
-  const sabado = conFecha.filter(f => diaSemanaColombia(f.fecha_partido) === 6);
-  const domingo = conFecha.filter(f => diaSemanaColombia(f.fecha_partido) === 0);
-  const finDeSemana = [...sabado, ...domingo];
-  const entreSemana = conFecha.filter(f => {
-    const d = diaSemanaColombia(f.fecha_partido);
-    return d !== 6 && d !== 0;
-  });
-
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Rendimiento en fin de semana</span>
-      <span class="stats-section-subtitulo">${finDeSemana.length} picks (sab+dom)</span>
-    </div>`;
-  if (finDeSemana.length < 10) {
-    html += `<div class="chart-card-vacio">Todavia muy pocos sabados/domingos verificados para sacar algo en limpio -- se va llenando solo cada fin de semana.</div>`;
-  } else {
-    const rEntreSemana = resumenAcierto(entreSemana);
-    const rFinDeSemana = resumenAcierto(finDeSemana);
-    const rSabado = resumenAcierto(sabado);
-    const rDomingo = resumenAcierto(domingo);
-    html += `<p class="stats-ayuda">Entre semana vs fin de semana</p>
-    <div class="stats-comparativa">
-      <div class="stats-comparativa-item">
-        <span class="pill pill-valor-bajo">Entre semana</span>
-        ${aroConNumero(parseFloat(rEntreSemana.pct), COLOR_NEUTRO, null, 80)}
-        <p class="stats-comparativa-detalle">${rEntreSemana.aciertos}/${rEntreSemana.total} picks</p>
-      </div>
-      <div class="stats-comparativa-item">
-        <span class="pill pill-valor-alto">Fin de semana</span>
-        ${aroConNumero(parseFloat(rFinDeSemana.pct), COLOR_VALOR, null, 80)}
-        <p class="stats-comparativa-detalle">${rFinDeSemana.aciertos}/${rFinDeSemana.total} picks</p>
-      </div>
-    </div>
-    <p class="stats-ayuda">Sabado vs domingo, por separado</p>
-    <div class="stats-comparativa">
-      <div class="stats-comparativa-item">
-        <span class="pill pill-radar">Sabado</span>
-        ${aroConNumero(parseFloat(rSabado.pct), COLOR_RADAR, null, 80)}
-        <p class="stats-comparativa-detalle">${rSabado.aciertos}/${rSabado.total} picks</p>
-      </div>
-      <div class="stats-comparativa-item">
-        <span class="pill pill-confiable">Domingo</span>
-        ${aroConNumero(parseFloat(rDomingo.pct), COLOR_CONFIABLE, null, 80)}
-        <p class="stats-comparativa-detalle">${rDomingo.aciertos}/${rDomingo.total} picks</p>
-      </div>
-    </div>
-    <p class="stats-nota">Esta es la estadistica separada que pediste -- mide solo sabados y domingos, sin mezclarse con el resto de la semana. Con mas fines de semana acumulados, esto se vuelve mas confiable.</p>`;
-  }
-  html += `</div>`;
-
-
-  const conMediana = filas.filter(f => f.sobre_mediana_liga === true || f.sobre_mediana_liga === false);
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Goles esperados vs promedio de su liga</span>
-      <span class="stats-section-subtitulo">${conMediana.length} picks con dato</span>
-    </div>`;
-  if (conMediana.length < 20) {
-    html += `<div class="chart-card-vacio">Muestra todavia muy chica (menos de 20 picks) -- este criterio solo esta activo en 11 de las 13 ligas por ahora. No sacar conclusiones todavia, dejar que se acumule.</div>`;
-  } else {
-    const sobreProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === true));
-    const bajoProm = resumenAcierto(conMediana.filter(f => f.sobre_mediana_liga === false));
-    html += `<div class="stats-comparativa">
-      <div class="stats-comparativa-item">
-        <span class="pill pill-valor-alto">Sobre promedio</span>
-        ${aroConNumero(parseFloat(sobreProm.pct), COLOR_VALOR, null, 76)}
-        <p class="stats-comparativa-detalle">${sobreProm.aciertos}/${sobreProm.total} picks</p>
-      </div>
-      <div class="stats-comparativa-item">
-        <span class="pill pill-valor-bajo">Bajo promedio</span>
-        ${aroConNumero(parseFloat(bajoProm.pct), COLOR_NEUTRO, null, 76)}
-        <p class="stats-comparativa-detalle">${bajoProm.aciertos}/${bajoProm.total} picks</p>
-      </div>
-    </div>
-    <p class="stats-nota">Si "Sobre promedio" se mantiene por encima de "Bajo promedio" con el tiempo y con mas muestra, confirma que sirve como criterio de prioridad. Si se empareja o se voltea, hay que revisarlo.</p>`;
-  }
-  html += `</div>`;
-
-  // ---------- Filtro triple ----------
-  const conFiltro = filas.filter(f => f.cumple_filtro_triple === true || f.cumple_filtro_triple === false);
-  html += `<div class="stats-section">
-    <div class="stats-section-header">
-      <span class="stats-section-titulo">Filtro triple (probabilidad + cuota + goles esperados)</span>
-      <span class="stats-section-subtitulo">${conFiltro.length} picks con dato</span>
-    </div>`;
-  if (conFiltro.length < 20) {
-    html += `<div class="chart-card-vacio">Muestra todavia muy chica -- este filtro es nuevo, se va llenando desde ahora.</div>`;
-  } else {
-    const cumple = resumenAcierto(conFiltro.filter(f => f.cumple_filtro_triple === true));
-    const noCumple = resumenAcierto(conFiltro.filter(f => f.cumple_filtro_triple === false));
-    html += `<div class="stats-comparativa">
-      <div class="stats-comparativa-item">
-        <span class="pill" style="background:#f5f3ff;color:#6d28d9">Cumple el filtro</span>
-        ${aroConNumero(parseFloat(cumple.pct), "#7c3aed", null, 80)}
-        <p class="stats-comparativa-detalle">${cumple.aciertos}/${cumple.total} picks</p>
-      </div>
-      <div class="stats-comparativa-item">
-        <span class="pill pill-valor-bajo">No lo cumple</span>
-        ${aroConNumero(parseFloat(noCumple.pct), COLOR_NEUTRO, null, 80)}
-        <p class="stats-comparativa-detalle">${noCumple.aciertos}/${noCumple.total} picks</p>
-      </div>
-    </div>
-    <p class="stats-nota">Backtest inicial (Sept 2026, 11 de 13 ligas): 71.4% vs 61.7%. Esto mide si esa ventaja se sostiene con datos reales en vivo, dia a dia.</p>`;
-  }
-  html += `</div>`;
-
-  resultadosDiv.innerHTML = html;
-
-  // ---------- Dibujar las graficas ----------
-  const pluginsDisponibles = (typeof ChartDataLabels !== "undefined") ? [ChartDataLabels] : [];
-
-  if (datosNivel.length > 0) {
-    dibujarChart("chart-nivel", {
-      type: "bar",
-      plugins: pluginsDisponibles,
-      data: {
-        labels: datosNivel.map(d => nivelesTexto[d.niv]),
-        datasets: [{
-          data: datosNivel.map(d => parseFloat(d.r.pct)),
-          backgroundColor: datosNivel.map(d => nivelesColor[d.niv]),
-          borderRadius: 6,
-        }],
-      },
-      options: {
-        ...OPCIONES_BASE_CHART,
-        indexAxis: "y",
-        scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
-        plugins: {
-          legend: { display: false },
-          datalabels: {
-            anchor: "end", align: "end", color: "#0f172a", font: { size: 11.5, weight: "600" },
-            formatter: (value, ctx) => `${value}% (${datosNivel[ctx.dataIndex].r.aciertos}/${datosNivel[ctx.dataIndex].r.total})`,
-          },
-        },
-      },
-    });
-  }
-
-  dibujarChart("chart-liga", {
-    type: "bar",
-    plugins: pluginsDisponibles,
-    data: {
-      labels: datosLiga.map(d => d.liga),
-      datasets: [{
-        data: datosLiga.map(d => parseFloat(d.r.pct)),
-        backgroundColor: COLOR_CONFIABLE,
-        borderRadius: 5,
-      }],
-    },
-    options: {
-      ...OPCIONES_BASE_CHART,
-      indexAxis: "y",
-      scales: { ...OPCIONES_BASE_CHART.scales, x: { ...OPCIONES_BASE_CHART.scales.x, max: 100, title: { display: true, text: "% de acierto" } } },
-      plugins: {
-        legend: { display: false },
-        datalabels: {
-          anchor: "end", align: "end", color: "#0f172a", font: { size: 11, weight: "600" },
-          formatter: (value, ctx) => `${value}% (${datosLiga[ctx.dataIndex].r.aciertos}/${datosLiga[ctx.dataIndex].r.total})`,
-        },
-      },
-      onClick: (evt, elements) => {
-        if (!elements.length) return;
-        const liga = datosLiga[elements[0].index].liga;
-        mostrarDetalleLiga(liga, filas);
-      },
-    },
-  });
-
-  if (semanasOrdenadas.length >= 2) {
-    const pctsPorSemana = semanasOrdenadas.map(s => parseFloat(resumenAcierto(porSemana[s]).pct));
-    dibujarChart("chart-evolucion", {
-      type: "line",
-      data: {
-        labels: semanasOrdenadas.map(s => new Date(s).toLocaleDateString("es-CO", { day: "2-digit", month: "short" })),
-        datasets: [{
-          data: pctsPorSemana,
-          borderColor: COLOR_CONFIABLE,
-          backgroundColor: "rgba(34,197,94,0.1)",
-          fill: true,
-          tension: 0.25,
-          pointRadius: 3,
-          pointBackgroundColor: COLOR_CONFIABLE,
-        }],
-      },
-      options: {
-        ...OPCIONES_BASE_CHART,
-        scales: { ...OPCIONES_BASE_CHART.scales, y: { ...OPCIONES_BASE_CHART.scales.y, min: 0, max: 100, title: { display: true, text: "% de acierto" } } },
-      },
-    });
-  }
-
-  if (combos && combos.length > 0) {
-    const ganadas = combos.filter(c => c.resultado_combinada === "GANO_COMPLETA").length;
-    const falladas = combos.filter(c => c.resultado_combinada === "FALLO").length;
-    const pendientes = combos.filter(c => c.resultado_combinada === "PENDIENTE").length;
-    dibujarChart("chart-combo", {
-      type: "doughnut",
-      plugins: pluginsDisponibles,
-      data: {
-        labels: ["Gano completa", "Fallo", "Pendiente"],
-        datasets: [{
-          data: [ganadas, falladas, pendientes],
-          backgroundColor: [COLOR_GANO, COLOR_FALLO, COLOR_PENDIENTE],
-          borderWidth: 2,
-          borderColor: "#ffffff",
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: "62%",
-        plugins: {
-          legend: { position: "bottom", labels: { font: { size: 11.5 }, boxWidth: 12, padding: 14 } },
-          datalabels: {
-            color: "#ffffff", font: { size: 12, weight: "700" },
-            formatter: (value) => (value > 0 ? value : ""),
-          },
-        },
-      },
-    });
-  }
-}
-
-function mostrarDetalleLiga(liga, filas) {
-  const panel = document.getElementById("detalle-liga-panel");
-  if (!panel) return;
-
-  if (ligaAbierta === liga) {
-    panel.innerHTML = "";
-    ligaAbierta = null;
-    return;
-  }
-  ligaAbierta = liga;
-
-  const partidos = filas
-    .filter(f => f.liga_nombre === liga)
-    .sort((a, b) => new Date(b.fecha_partido) - new Date(a.fecha_partido));
-
-  let html = `<div class="liga-detalle">
-    <p class="liga-detalle-titulo">${liga} -- ${partidos.length} picks verificados</p>`;
-
-  partidos.forEach(p => {
-    const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
-    const marcador = tieneMarcador ? `${p.goles_local_final}-${p.goles_visita_final}` : "s/d";
-    const fecha = p.fecha_partido ? new Date(p.fecha_partido).toLocaleDateString("es-CO", { day: "2-digit", month: "short" }) : "";
-    const badge = p.resultado === true
-      ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
-      : '<span class="resultado-badge resultado-fallo">Fallo</span>';
-    html += `<div class="liga-detalle-fila">
-      <span class="liga-detalle-partido">${p.partido || "?"} <span style="color:#cbd5e1">(${fecha})</span></span>
-      <span class="liga-detalle-marcador">${marcador}</span>
-      ${badge}
-    </div>`;
-  });
-
-  html += `</div>`;
-  panel.innerHTML = html;
-}
-
-// ================== RESULTADOS (marcadores de dias anteriores) ==================
-function fechaColombiaDeTimestamp(ts) {
-  const d = new Date(new Date(ts).getTime() - 5 * 60 * 60 * 1000);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function etiquetaDiaCorta(fechaStr) {
-  const d = new Date(fechaStr + "T12:00:00");
-  const diasSemana = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-  return `${diasSemana[d.getDay()]} ${d.getDate()}`;
-}
-
-function etiquetaDiaLarga(fechaStr) {
-  const d = new Date(fechaStr + "T12:00:00");
-  return d.toLocaleDateString("es-CO", { weekday: "long", day: "2-digit", month: "long" });
-}
-
+// ================== RESULTADOS ==================
 let datosResultadosPorDia = {};
+let combMetodoRes = {};
+let miCombRes = {};
 let diaResultadoActivo = null;
 
 async function cargarResultados() {
-  resultadosDiv.innerHTML = '<p class="info-card">Cargando...</p>';
-  comboResultadoDiv.innerHTML = "";
-
-  const hoy = hoyISO(0);
+  vistaEl.innerHTML = titulo("Resultados", "Últimos 4 días", false) + '<div class="cargando">Cargando...</div>';
+  builderSlot.innerHTML = "";
   const desde = hoyISO(-4);
-
-  const { data, error } = await supabaseClient
-    .from("picks")
-    .select("*")
-    .gte("fecha_partido", desde + "T00:00:00-05:00")
-    .lt("fecha_partido", hoy + "T00:00:00-05:00")
-    .not("resultado", "is", null)
-    .order("fecha_partido", { ascending: false });
-
-  if (error) {
-    resultadosDiv.innerHTML = `<div class="info-card">Error leyendo resultados: ${error.message}</div>`;
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay resultados verificados en los ultimos dias.</div>`;
-    return;
-  }
+  const [pk, cm, mc] = await Promise.all([
+    supabaseClient.from("picks").select("*").gte("fecha_partido", desde + "T00:00:00-05:00").lte("fecha_partido", new Date().toISOString()).order("fecha_partido", { ascending: false }),
+    supabaseClient.from("combinada_dia").select("*").gte("fecha", desde),
+    supabaseClient.from("mi_combinada").select("*").gte("fecha", desde),
+  ]);
+  if (vistaActual !== "resultados") return;
+  if (pk.error) { vistaEl.innerHTML = titulo("Resultados", "Últimos 4 días", false) + `<div class="vacio">Error leyendo resultados: ${esc(pk.error.message)}</div>`; return; }
 
   datosResultadosPorDia = {};
-  data.forEach(p => {
-    const clave = fechaColombiaDeTimestamp(p.fecha_partido);
-    if (!datosResultadosPorDia[clave]) datosResultadosPorDia[clave] = [];
-    datosResultadosPorDia[clave].push(p);
+  (pk.data || []).filter(esSenal).forEach((p) => {
+    const k = fechaColombia(p.fecha_partido);
+    (datosResultadosPorDia[k] = datosResultadosPorDia[k] || []).push(p);
   });
+  combMetodoRes = {}; miCombRes = {};
+  (cm.data || []).forEach((c) => { if (!c.mensaje && c.picks) combMetodoRes[c.fecha] = c; });
+  (mc.data || []).forEach((c) => { miCombRes[c.fecha] = c; });
 
-  const diasOrdenados = Object.keys(datosResultadosPorDia).sort().reverse();
-  diaResultadoActivo = diasOrdenados[0];
-  renderizarPantallaResultados();
+  const dias = Object.keys(datosResultadosPorDia).filter((d) => datosResultadosPorDia[d].some((p) => p.resultado !== null)).sort().reverse();
+  diaResultadoActivo = dias[0] || null;
+  renderResultados();
 }
 
-function renderizarPantallaResultados() {
-  const diasOrdenados = Object.keys(datosResultadosPorDia).sort().reverse();
-
-  let html = '<div class="dias-selector">';
-  diasOrdenados.forEach(dia => {
-    const picksDia = datosResultadosPorDia[dia];
-    const aciertosDia = picksDia.filter(p => p.resultado === true).length;
-    const activo = dia === diaResultadoActivo ? " dia-pill-activo" : "";
-    html += `<div class="dia-pill${activo}" data-dia="${dia}">
-      <span class="dia-pill-fecha">${etiquetaDiaCorta(dia)}</span>
-      <span class="dia-pill-detalle">${aciertosDia}/${picksDia.length}</span>
-    </div>`;
-  });
-  html += "</div>";
-
-  const picksDia = datosResultadosPorDia[diaResultadoActivo] || [];
-  const aciertosDia = picksDia.filter(p => p.resultado === true).length;
-  html += `<div class="dia-header">${etiquetaDiaLarga(diaResultadoActivo)} -- ${aciertosDia}/${picksDia.length} acertados</div>`;
-
-  picksDia.forEach(p => {
-    const tieneMarcador = p.goles_local_final !== null && p.goles_local_final !== undefined;
-    const marcador = tieneMarcador ? `${p.goles_local_final} - ${p.goles_visita_final}` : "Marcador no disponible";
-    const nc = nivelClases(p.nivel);
-    const esTriple = p.cumple_filtro_triple === true;
-    const badge = p.resultado === true
-      ? '<span class="resultado-badge resultado-acerto">Acerto</span>'
-      : '<span class="resultado-badge resultado-fallo">Fallo</span>';
-
-    html += `<div class="marcador-card${esTriple ? " partido-card-triple" : ""}">
-      ${esTriple ? '<div class="filtro-triple-banner">Cumple el filtro triple -- alta precision historica</div>' : ""}
-      <div class="marcador-card-top">
-        <span class="marcador-equipos">${p.partido}</span>
-        ${badge}
-      </div>
-      <p class="marcador-final">${marcador}</p>
-      <div class="marcador-meta">
-        <span class="marcador-meta-izq">${p.liga_nombre} -- <span class="pill ${nc.pill}">${nc.texto}</span></span>
-        <span class="marcador-meta-izq">Cuota ${p.cuota}</span>
-      </div>
-    </div>`;
-  });
-
-  resultadosDiv.innerHTML = html;
-
-  document.querySelectorAll(".dia-pill").forEach(el => {
-    el.addEventListener("click", () => {
-      diaResultadoActivo = el.dataset.dia;
-      renderizarPantallaResultados();
-    });
-  });
+function resultadoPata(liga_id, partido, fecha) {
+  const lista = datosResultadosPorDia[fecha] || [];
+  const p = lista.find((x) => x.liga_id === liga_id && x.partido === partido);
+  return p ? p.resultado : null;
+}
+function tagPata(r) { return r === true ? '<span class="tag t-gain">Acertó</span>' : r === false ? '<span class="tag t-loss">Falló</span>' : '<span class="tag t-muted">Pendiente</span>'; }
+function tagCombinada(rs) {
+  if (rs.some((r) => r === false)) return '<span class="tag t-loss">Falló</span>';
+  if (rs.length && rs.every((r) => r === true)) return '<span class="tag t-gain">Ganó</span>';
+  return '<span class="tag t-muted">Pendiente</span>';
 }
 
-
-// ================== LEER PICKS DE SUPABASE ==================
-// Calcula la fecha calendario en COLOMBIA (UTC-5, sin horario de verano),
-// SIN depender de la zona horaria del dispositivo/navegador.
-//
-// ANTES: usaba `new Date().toISOString().split("T")[0]`, que siempre
-// convierte a UTC. Eso hacia que, desde las 7:00pm hora Colombia en
-// adelante (cuando en UTC ya cruzo la medianoche), la pestana "Hoy"
-// mostrara los partidos de MANANA por error -- por eso se veian dos dias
-// mezclados dependiendo de a que hora se abriera la app.
-//
-// AHORA: se resta 5 horas a la hora actual en UTC antes de leer el dia
-// calendario, para que la frontera de "hoy" siempre caiga en la
-// medianoche real de Colombia, sin importar la zona horaria del telefono.
-function hoyISO(offsetDias = 0) {
-  const ahoraUTC = new Date();
-  const colombiaMs = ahoraUTC.getTime() - 5 * 60 * 60 * 1000; // UTC-5
-  const d = new Date(colombiaMs);
-  d.setUTCDate(d.getUTCDate() + offsetDias);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-async function cargarPicks(offsetDias = 0) {
-  resultadosDiv.innerHTML = '<p class="info-card">Cargando...</p>';
-  comboResultadoDiv.innerHTML = "";
-  const fechaObjetivo = hoyISO(offsetDias);
-
-  // Frontera del dia en hora Colombia (UTC-5) de forma EXPLICITA (con el
-  // "-05:00" al final). Antes se mandaba sin zona horaria, y Supabase la
-  // interpretaba como UTC -- corriendo la frontera del dia 5 horas
-  // respecto a la medianoche real de Colombia.
-  const inicio = fechaObjetivo + "T00:00:00-05:00";
-  const fin = fechaObjetivo + "T23:59:59-05:00";
-
-  const { data, error } = await supabaseClient
-    .from("picks")
-    .select("*")
-    .gte("fecha_partido", inicio)
-    .lte("fecha_partido", fin)
-    .order("fecha_partido", { ascending: true });
-
-  if (error) {
-    resultadosDiv.innerHTML = `<div class="info-card">Error leyendo picks: ${error.message}</div>`;
+function renderResultados() {
+  let html = titulo("Resultados", "Últimos 4 días", false);
+  const dias = Object.keys(datosResultadosPorDia).filter((d) => datosResultadosPorDia[d].some((p) => p.resultado !== null)).sort().reverse();
+  if (!dias.length) {
+    vistaEl.innerHTML = html + '<div class="vacio">Todavía no hay resultados verificados en los últimos días.</div>';
     return;
   }
+  html += '<div class="days">' + dias.map((d) => {
+    const ver = datosResultadosPorDia[d].filter((p) => p.resultado !== null);
+    const ac = ver.filter((p) => p.resultado === true).length;
+    return `<button class="day${d === diaResultadoActivo ? " on" : ""}" data-dia="${d}">${etiquetaDiaCorta(d)}<small>${ac} de ${ver.length}</small></button>`;
+  }).join("") + "</div>";
 
-  mostrarResultados(data || []);
-  cargarCombinada(fechaObjetivo);
-}
+  const d = diaResultadoActivo;
+  const picks = (datosResultadosPorDia[d] || []).filter((p) => p.resultado !== null);
+  const ac = picks.filter((p) => p.resultado === true).length;
 
-function nivelClases(nivel) {
-  if (nivel === "CONFIABLE") return { borde: "borde-confiable", pill: "pill-confiable", cuota: "cuota-confiable", texto: "Confiable" };
-  if (nivel === "RADAR_ALTO") return { borde: "borde-radar-alto", pill: "pill-radar-alto", cuota: "cuota-radar-alto", texto: "Alto (poca muestra)" };
-  if (nivel === "RADAR") return { borde: "borde-radar", pill: "pill-radar", cuota: "cuota-radar", texto: "En el radar" };
-  return { borde: "borde-ninguno", pill: "pill-ninguno", cuota: "cuota-ninguno", texto: "Sin señal" };
-}
+  // combinadas del dia: metodo y mi criterio
+  const cm = combMetodoRes[d], mc = miCombRes[d];
+  const bloque = (nombre, patas, cuota) => {
+    const rs = patas.map((x) => resultadoPata(x.liga_id, x.partido, d));
+    return `<div class="legs resumen"><b style="font-weight:600">${nombre}</b><span>cuota ${fmt(cuota, 2)} ${tagCombinada(rs)}</span></div>` +
+      patas.map((x, i) => `<div class="legs"><span>${esc(x.partido)}</span>${tagPata(rs[i])}</div>`).join("");
+  };
+  html += `<div class="sec"><h2>Combinadas del día</h2><span>${etiquetaDiaLarga(d)}</span></div><div class="card">` +
+    (cm ? bloque("Método", cm.picks || [], cm.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Método</b><span>sin combinada ese día</span></div>`) +
+    (mc ? bloque("Mi criterio", (mc.patas || []).map((x) => ({ liga_id: x.liga_id, partido: x.partido })), mc.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Mi criterio</b><span>sin apuesta confirmada</span></div>`) +
+    "</div>";
 
-function mostrarResultados(picks) {
-  if (picks.length === 0) {
-    resultadosDiv.innerHTML = `<div class="info-card">Todavia no hay partidos analizados para este dia. El analisis corre una vez al dia.</div>`;
-    return;
-  }
-
-  // Solo se muestran partidos con señal real (Confiable / Radar Alto /
-  // Radar) -- los que salen "Sin señal" o "Muestra insuficiente" se
-  // esconden de esta pantalla a proposito: no aportan nada a la hora de
-  // elegir un partido, solo eran ruido.
-  const conSenal = picks.filter(p => p.nivel === "CONFIABLE" || p.nivel === "RADAR_ALTO" || p.nivel === "RADAR");
-
-  if (conSenal.length === 0) {
-    resultadosDiv.innerHTML = `<div class="info-card">Ningun partido con señal clara para este dia (se analizaron ${picks.length}, ninguno califico como Confiable o Radar).</div>`;
-    return;
-  }
-
-  let html = `<div class="info-card"><strong>${conSenal.length}</strong> partido${conSenal.length === 1 ? "" : "s"} con señal para este dia.</div>`;
-
+  html += `<div class="sec"><h2>Partidos con señal</h2><span>${ac} de ${picks.length} acertado${ac === 1 ? "" : "s"}</span></div>`;
   const porLiga = {};
-  conSenal.forEach(p => {
-    if (!porLiga[p.liga_nombre]) porLiga[p.liga_nombre] = [];
-    porLiga[p.liga_nombre].push(p);
-  });
-
-  Object.keys(porLiga).sort().forEach(liga => {
-    html += `<p class="liga-nombre">${liga}</p>`;
-    porLiga[liga].forEach(p => {
-      const fecha = new Date(p.fecha_partido);
-      const horaStr = fecha.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
-      const nc = nivelClases(p.nivel);
-      const esTriple = p.cumple_filtro_triple === true;
-      const claseTriple = esTriple ? " partido-card-triple" : "";
-
-      html += `<div class="partido-card ${nc.borde}${claseTriple}">`;
-      if (esTriple) {
-        html += `<div class="filtro-triple-banner">Cumple el filtro triple -- alta precision historica</div>`;
-      }
-      html += `<div class="partido-card-top">`;
-      html += `<h3 class="partido-nombre">${p.partido}</h3>`;
-      html += `<span class="pill ${nc.pill}">${nc.texto}</span>`;
-      html += `</div>`;
-      html += `<p class="partido-hora">${horaStr}</p>`;
-      html += `<div class="partido-dato"><span>Probabilidad</span><strong>${(p.probabilidad * 100).toFixed(1)}%</strong></div>`;
-      html += `<div class="partido-dato"><span>Cuota Over 2.5</span><strong class="${nc.cuota}">${p.cuota}</strong></div>`;
-      if (p.regla_pct) {
-        html += `<div class="partido-dato"><span>Historico (${p.regla_tipo})</span><strong>${p.regla_pct}%</strong></div>`;
-      }
-      if (p.valor_vs_mercado !== null && p.valor_vs_mercado !== undefined) {
-        const vpp = (p.valor_vs_mercado * 100).toFixed(1);
-        const signo = p.valor_vs_mercado >= 0 ? '+' : '';
-        html += `<div class="partido-dato"><span>Valor vs mercado</span><strong>${signo}${vpp}pp</strong></div>`;
-      }
-      if (p.btts_mercado_pct !== null && p.btts_mercado_pct !== undefined) {
-        html += `<div class="partido-dato"><span>BTTS mercado (justo)</span><strong>${p.btts_mercado_pct}%</strong></div>`;
-        html += `<div class="partido-dato"><span>Margen del mercado (vig)</span><strong>${p.vig_mercado_pct}%</strong></div>`;
-      }
-      // Forma reciente por localia -- local anotando/recibiendo DE LOCAL,
-      // visitante anotando/recibiendo DE VISITANTE (ultimos 6 partidos en
-      // ese rol especifico). Solo se muestra si hay historial suficiente.
-      if (p.goles_esperados !== null && p.goles_esperados !== undefined) {
-        html += `<div class="partido-forma">`;
-        html += `<div class="partido-dato"><span>Local anota de local (últ. 6)</span><strong>${p.forma_local_anota}</strong></div>`;
-        html += `<div class="partido-dato"><span>Local recibe de local (últ. 6)</span><strong>${p.forma_local_recibe}</strong></div>`;
-        html += `<div class="partido-dato"><span>Visitante anota de visitante</span><strong>${p.forma_visita_anota}</strong></div>`;
-        html += `<div class="partido-dato"><span>Visitante recibe de visitante</span><strong>${p.forma_visita_recibe}</strong></div>`;
-        const badge = p.sobre_mediana_liga === true ? '<span class="badge-inline">Sobre promedio de su liga</span>' : '';
-        html += `<div class="partido-dato"><span>Goles esperados</span><strong>${p.goles_esperados}${badge}</strong></div>`;
-        html += `</div>`;
-      }
-      html += `</div>`;
+  picks.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
+  Object.keys(porLiga).sort().forEach((liga) => {
+    html += `<div class="band">${esc(liga)}</div>`;
+    porLiga[liga].forEach((p) => {
+      const triple = p.cumple_filtro_triple === true;
+      const [loc, vis] = equipos(p);
+      const tiene = p.goles_local_final !== null && p.goles_local_final !== undefined;
+      html += `<div class="match${triple ? " triple" : ""}" style="cursor:default">
+        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}<span class="tag ${p.resultado ? "t-gain" : "t-loss"}" style="margin-left:auto">${p.resultado ? "Acertó" : "Falló"}</span></div>
+        <div class="res-top"><div class="teams"><b style="font-size:15px;line-height:20px">${esc(loc)}<br>${esc(vis)}</b></div><span class="score">${tiene ? p.goles_local_final + " - " + p.goles_visita_final : "--"}</span></div>
+        <div class="kvs"><div>Mercado</div><div class="r">Over 2.5</div><div>Cuota</div><div class="r">${fmt(p.cuota, 2)}</div><div>Goles totales</div><div class="r">${tiene ? p.goles_local_final + p.goles_visita_final : "--"}</div></div>
+      </div>`;
     });
   });
-
-  resultadosDiv.innerHTML = html;
+  html += `<div class="foot">Solo se muestran partidos con señal. Un resultado aislado no cambia las reglas: se evalúa el acumulado.</div>`;
+  vistaEl.innerHTML = html;
 }
 
-async function cargarCombinada(fecha) {
-  const { data, error } = await supabaseClient
-    .from("combinada_dia")
-    .select("*")
-    .eq("fecha", fecha)
-    .maybeSingle();
+// ================== ESTADISTICAS ==================
+let filtroDias = "todos"; // "todos" | "finde"
+let statsData = null;
 
-  if (error || !data || data.mensaje) {
-    comboResultadoDiv.innerHTML = "";
+async function traerTodos(construir) {
+  let todo = [], desde = 0;
+  for (;;) {
+    const { data, error } = await construir().range(desde, desde + 999);
+    if (error) return { error };
+    todo = todo.concat(data || []);
+    if (!data || data.length < 1000) break;
+    desde += 1000;
+  }
+  return { data: todo };
+}
+
+async function cargarEstadisticas() {
+  builderSlot.innerHTML = "";
+  vistaEl.innerHTML = titulo("Estadísticas", "Cargando...", false) + '<div class="cargando">Cargando...</div>';
+  const [pk, cm, mc] = await Promise.all([
+    traerTodos(() => supabaseClient.from("picks").select("id, liga_id, liga_nombre, partido, nivel, resultado, fecha_partido, probabilidad, cuota, cumple_filtro_triple, goles_local_final, goles_visita_final").not("resultado", "is", null).order("fecha_partido", { ascending: true })),
+    supabaseClient.from("combinada_resultados").select("fecha, resultado_combinada, cuota_total"),
+    supabaseClient.from("mi_combinada_resultados").select("fecha, resultado_combinada, cuota_total, confirmada_en"),
+  ]);
+  if (vistaActual !== "stats") return;
+  if (pk.error) { vistaEl.innerHTML = titulo("Estadísticas", "", false) + `<div class="vacio">Error: ${esc(pk.error.message)}</div>`; return; }
+  statsData = { picks: (pk.data || []).filter(esSenal), metodo: cm.error ? [] : cm.data || [], mias: mc.error ? [] : mc.data || [] };
+  renderEstadisticas();
+}
+
+function aplicaFiltro(fechaStr) { return filtroDias === "todos" || esFinDeSemana(fechaStr); }
+function picksFiltrados() { return statsData.picks.filter((p) => aplicaFiltro(fechaColombia(p.fecha_partido))); }
+
+function unidadesComb(filas) {
+  const ver = filas.filter((f) => f.resultado_combinada !== "PENDIENTE");
+  const u = ver.reduce((s, f) => s + (f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_total) - 1 : -1), 0);
+  return { ver: ver.length, u, roi: ver.length ? (100 * u) / ver.length : null, ganadas: ver.filter((f) => f.resultado_combinada === "GANO_COMPLETA").length };
+}
+
+function seriesAcumuladas(filas, fechas) {
+  // rendimiento acumulado (en unidades) de las combinadas ya verificadas, una por dia
+  const ver = filas.filter((f) => f.resultado_combinada !== "PENDIENTE").sort((a, b) => a.fecha.localeCompare(b.fecha));
+  let acum = 0;
+  return ver.map((f) => { acum += f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_total) - 1 : -1; return { x: fechas.indexOf(f.fecha), y: acum }; });
+}
+
+function renderEstadisticas() {
+  const todosPicks = picksFiltrados();
+  const hoy = hoyISO(0);
+  let html = titulo("Estadísticas", `${todosPicks.length} picks verificados`, false);
+
+  html += `<div class="seg"><button data-filtro="todos" class="${filtroDias === "todos" ? "on" : ""}">Todos los días</button><button data-filtro="finde" class="${filtroDias === "finde" ? "on" : ""}">Vie, sáb y dom</button></div>
+    <p class="ill" style="padding-top:8px">El método se mide todos los días. El filtro "Vie, sáb y dom" muestra solo los días en que apuestas.</p>`;
+
+  if (!todosPicks.length) {
+    vistaEl.innerHTML = html + '<div class="vacio">No hay picks verificados con este filtro todavía.</div>';
     return;
   }
 
-  const nombres = (data.picks || []).map(p => p.partido).join(" + ");
-  const probTexto = data.probabilidad_estimada ? `${data.probabilidad_estimada}% estimado` : "";
+  // ---------- Resumen ----------
+  const gen = resumen(todosPicks);
+  const roiG = rendimiento(todosPicks);
+  html += `<div class="sec" style="padding-bottom:10px"><h2>Resumen</h2><span>picks con señal verificados</span></div>
+    <div class="g3"><div><small>Acierto</small><b>${fmt(gen.pct)}%</b></div><div><small>Rendimiento</small><b class="${claseSigno(roiG)}">${signo(roiG)}%</b></div><div><small>Cuota prom.</small><b>${fmt(cuotaProm(todosPicks), 2)}</b></div></div>
+    <p class="note note-pad">${gen.aciertos} de ${gen.total} picks acertados. Rendimiento: ${signo(unidades(todosPicks), 2)} unidades apostando 1 a cada pick.</p>`;
 
-  comboResultadoDiv.innerHTML = `
-    <div class="combo-card">
-      <p class="combo-titulo">Combinada del dia -- cuota ${data.cuota_total}</p>
-      <p class="combo-detalle">${nombres} ${probTexto ? "-- " + probTexto : ""}</p>
-    </div>`;
+  // ---------- Mi criterio contra el metodo ----------
+  const mias = statsData.mias.filter((f) => aplicaFiltro(f.fecha));
+  const diasMios = new Set(mias.map((f) => f.fecha));
+  let metodo = statsData.metodo.filter((f) => aplicaFiltro(f.fecha));
+  if (mias.length) metodo = metodo.filter((f) => diasMios.has(f.fecha)); // solo los dias en que existen las dos
+  const uM = unidadesComb(metodo), uY = unidadesComb(mias);
+  const enDias = todosPicks.filter((p) => diasMios.has(fechaColombia(p.fecha_partido)));
+  const lista = resumen(enDias);
+  html += `<div class="sec"><h2>Mi criterio contra el método</h2><span>combinadas de 2 patas</span></div>`;
+  if (uY.ver >= 2) {
+    const fechas = [...new Set(metodo.concat(mias).filter((f) => f.resultado_combinada !== "PENDIENTE").map((f) => f.fecha))].sort();
+    html += `<div class="chart-wrap">${graficaLineas([
+      { name: "Método", color: C.gris, pts: seriesAcumuladas(metodo, fechas) },
+      { name: "Mi criterio", color: C.tinta, pts: seriesAcumuladas(mias, fechas) },
+    ], fechas.length, { xl: fechas.length > 1 ? [[0, fechaMini(fechas[0])], [fechas.length - 1, fechaMini(fechas[fechas.length - 1])]] : [] })}</div>
+    <div class="lleg"><span><b style="color:${C.tinta}">Mi criterio</b></span><span><b style="color:${C.gris}">Método</b></span><span>Unidades acumuladas</span></div>`;
+  } else {
+    html += `<div class="vacio">${mias.length ? "Hace falta al menos 2 combinadas verificadas para dibujar la gráfica." : "Sin apuestas confirmadas todavía."}<br>Cuando confirmes tus combinadas, aquí aparece la gráfica de rendimiento acumulado.</div>`;
+  }
+  const fila = (n, ncomb, ganadas, roi, tot) => `<div class="tb c4c"><b style="font-weight:600">${n}</b><span class="r n">${ncomb}</span><span class="r">${ganadas}</span><span class="r ${claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  html += `<div style="padding-top:12px"><div class="tb h c4c"><span></span><span class="r">Combinadas</span><span class="r">Ganadas</span><span class="r">Rendim.</span></div>
+    ${fila("Método" + (mias.length ? " (mismos días)" : ""), metodo.length, uM.ver ? uM.ganadas : "--", uM.roi)}
+    ${fila("Mi criterio", mias.length, uY.ver ? uY.ganadas : "--", uY.roi)}
+    <div class="tb c4c"><span>Promedio de la lista</span><span class="r n">${mias.length ? enDias.length + " picks" : "--"}</span><span class="r n">${mias.length ? fmt(lista.pct) + "%" : "--"}</span><span class="r n">--</span></div></div>
+    <p class="note note-pad">Combinadas y rendimiento cuentan solo las ya verificadas. El promedio de la lista es el acierto por pata de todos los picks del método en esos días: sirve para saber si escoger tú aporta algo sobre escoger al azar dentro de lo que el método ya filtró.</p>`;
+
+  // ---------- Rendimiento por cuota ----------
+  const rangos = [["Menos de 1.30", 0, 1.3], ["1.30 a 1.40", 1.3, 1.4], ["1.40 a 1.50", 1.4, 1.5], ["1.50 a 1.70", 1.5, 1.7], ["1.70 o más", 1.7, 99]];
+  html += `<div class="sec"><h2>Rendimiento por cuota</h2><span>picks con señal</span></div>
+    <div class="tb h c5"><span>Rango</span><span class="r">Picks</span><span class="r">Acierto</span><span class="r">Equilibrio</span><span class="r">Rend.</span></div>`;
+  rangos.forEach(([n, a, b]) => {
+    const f = todosPicks.filter((p) => Number(p.cuota) >= a && Number(p.cuota) < b);
+    const r = resumen(f), roi = rendimiento(f), cp = cuotaProm(f);
+    const chica = f.length < MIN_PICKS_LIGA;
+    html += `<div class="tb c5${chica ? " mut" : ""}"><span>${n}</span><span class="r n">${f.length}</span><span class="r">${r.pct === null ? "--" : fmt(r.pct) + "%"}</span><span class="r n">${cp ? fmt(100 / cp) + "%" : "--"}</span><span class="r ${chica ? "" : claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  });
+  html += `<p class="note note-pad" style="margin-top:10px">Gris: menos de ${MIN_PICKS_LIGA} picks, no se interpreta. Equilibrio: acierto mínimo para no perder con esa cuota.</p>`;
+
+  // ---------- Ranking del dia ----------
+  const porDia = {};
+  todosPicks.forEach((p) => { (porDia[fechaColombia(p.fecha_partido)] = porDia[fechaColombia(p.fecha_partido)] || []).push(p); });
+  const top = [], resto = [];
+  Object.values(porDia).forEach((arr) => { arr.slice().sort((a, b) => b.probabilidad - a.probabilidad).forEach((p, i) => (i < 2 ? top : resto).push(p)); });
+  html += `<div class="sec"><h2>Ranking del día</h2><span>por probabilidad</span></div>
+    <div class="tb h c5r"><span>Grupo</span><span class="r">Picks</span><span class="r">Acierto</span><span class="r">Cuota</span><span class="r">Rend.</span></div>`;
+  [["Top 2 del día", top], ["Resto", resto]].forEach(([n, f]) => {
+    const r = resumen(f), roi = rendimiento(f);
+    html += `<div class="tb c5r"><span>${n}</span><span class="r n">${f.length}</span><span class="r">${r.pct === null ? "--" : fmt(r.pct) + "%"}</span><span class="r n">${f.length ? fmt(cuotaProm(f), 2) : "--"}</span><span class="r ${claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  });
+  html += `<p class="note note-pad" style="margin-top:10px">Mide si los 2 picks de mayor probabilidad de cada día aciertan más. Su cuota es más baja, por eso se compara también el rendimiento.</p>`;
+
+  // ---------- Por nivel ----------
+  html += `<div class="sec"><h2>Por nivel</h2><span>${todosPicks.length} picks</span></div>
+    <div class="tb h c4n"><span>Nivel</span><span class="r">Picks</span><span class="r">Acierto</span><span class="r">Rend.</span></div>`;
+  NIVELES_SENAL.forEach((niv) => {
+    const f = todosPicks.filter((p) => p.nivel === niv);
+    if (!f.length) return;
+    const r = resumen(f), roi = rendimiento(f);
+    html += `<div class="tb c4n"><span>${tagNivel(niv)}</span><span class="r n">${f.length}</span><span class="r">${fmt(r.pct)}%</span><span class="r ${claseSigno(roi)}">${signo(roi)}%</span></div>`;
+  });
+  html += `<p class="note note-pad" style="margin-top:10px">Confiable debería acertar más que En el radar. Si la diferencia es chica con esta muestra, es una señal para vigilar, no una conclusión.</p>`;
+
+  // ---------- Por liga (filas estilo bolsa) ----------
+  const porLiga = {};
+  todosPicks.forEach((p) => { (porLiga[p.liga_id] = porLiga[p.liga_id] || { nombre: p.liga_nombre, filas: [] }).filas.push(p); });
+  const ligas = Object.keys(porLiga).map((id) => ({ id, nombre: porLiga[id].nombre, filas: porLiga[id].filas, r: resumen(porLiga[id].filas) })).sort((a, b) => b.r.pct - a.r.pct);
+  html += `<div class="sec"><h2>Por liga</h2><span>diferencia contra el promedio general</span></div>
+    <p class="ill" style="padding-top:0;padding-bottom:10px">Toca una liga para abrir su análisis completo. La línea muestra el acierto acumulado, pick a pick.</p><div class="lista-ligas">`;
+  ligas.forEach((l) => {
+    const chica = l.r.total < MIN_PICKS_LIGA;
+    const d = l.r.pct - gen.pct;
+    let acum = 0;
+    const serie = l.filas.map((p, i) => { acum += p.resultado ? 1 : 0; return (100 * acum) / (i + 1); }).slice(-12);
+    const spark = serie.length >= 2 ? graficaSplit(serie, gen.pct, { W: 92, H: 40, margen: 5, minSpan: 30, aria: `Acierto acumulado de ${l.nombre}` }) : "<span></span>";
+    const nombre = l.nombre.replace(/^[^-]+ - /, "");
+    const pais = (l.nombre.match(/^([^-]+) - /) || [])[1] || "";
+    html += `<button class="lg${chica ? " chica" : ""}" data-liga="${esc(l.id)}"><div class="nm"><b>${esc(nombre)}</b><small>${esc(pais)}${pais ? ", " : ""}${l.r.aciertos} de ${l.r.total} picks</small></div>${spark}<div class="pc"><b>${fmt(l.r.pct)}%</b><span class="bd ${chica ? "n" : d >= 0 ? "g" : "r"}">${signo(d)} pp</span></div></button>`;
+  });
+  html += `</div><p class="note note-pad" style="margin-top:10px">Gris: menos de ${MIN_PICKS_LIGA} picks, no se interpreta.</p>`;
+
+  // ---------- Evolucion semanal ----------
+  const semanas = {};
+  todosPicks.forEach((p) => { const k = lunesDe(fechaColombia(p.fecha_partido)); (semanas[k] = semanas[k] || []).push(p); });
+  const lunesHoy = lunesDe(hoy);
+  const sem = Object.keys(semanas).filter((k) => k < lunesHoy && semanas[k].length >= 5).sort();
+  html += `<div class="sec"><h2>Evolución semanal</h2><span>semana en curso excluida</span></div>`;
+  if (sem.length >= 2) {
+    const vals = sem.map((k) => resumen(semanas[k]).pct);
+    html += `<div class="chart-wrap">${graficaSplit(vals, gen.pct, { W: 350, H: 140, lo: 0, hi: 100, yt: [0, 50, 100], fmtY: (t) => t + "%", padr: 40, padl: 20, xl: sem.map((k, i) => [i, fechaMini(k)]), aria: "Acierto por semana" })}</div>
+      <p class="note note-pad">La línea punteada es el acierto general. Solo semanas con al menos 5 picks.</p>`;
+  } else {
+    html += `<div class="vacio">Hacen falta al menos 2 semanas completas con 5 picks o más para dibujar la evolución.</div>`;
+  }
+
+  // ---------- Combinada del metodo ----------
+  const cmAll = statsData.metodo.filter((f) => aplicaFiltro(f.fecha));
+  const gan = cmAll.filter((f) => f.resultado_combinada === "GANO_COMPLETA").length;
+  const fal = cmAll.filter((f) => f.resultado_combinada === "FALLO").length;
+  const pen = cmAll.filter((f) => f.resultado_combinada === "PENDIENTE").length;
+  const verC = gan + fal;
+  html += `<div class="sec"><h2>Combinada del método</h2><span>${verC} verificada${verC === 1 ? "" : "s"}</span></div>`;
+  if (cmAll.length) {
+    html += `<div class="kpi"><div class="n">${verC ? fmt((100 * gan) / verC) + "%" : "--"}</div><p><b>${gan} de ${verC}</b> combinadas<br>ganadas completas</p></div>
+      <div class="stack">${gan ? `<i style="flex:${gan};background:${C.acierto}"></i>` : ""}${fal ? `<i style="flex:${fal};background:${C.fallo}"></i>` : ""}${pen ? `<i style="flex:${pen};background:${C.grisClaro}"></i>` : ""}</div>
+      <div class="leyenda"><span>${gan} ganadas</span><span>${fal} falladas</span><span>${pen} pendientes</span></div>`;
+  } else html += '<div class="vacio">Sin combinadas del método con este filtro todavía.</div>';
+
+  // ---------- Filtro triple ----------
+  const conF = todosPicks.filter((p) => p.cumple_filtro_triple === true || p.cumple_filtro_triple === false);
+  const cu = resumen(conF.filter((p) => p.cumple_filtro_triple === true)), nc = resumen(conF.filter((p) => p.cumple_filtro_triple === false));
+  html += `<div class="sec"><h2>Filtro triple</h2><span>${conF.length} picks con dato</span></div>
+    <div class="two"><div><small>Cumple el filtro</small><strong>${cu.total ? fmt(cu.pct) + "%" : "--"}</strong><em>${cu.total ? cu.aciertos + "/" + cu.total + " picks" : "0 picks verificados"}</em></div>
+    <div><small>No lo cumple</small><strong>${nc.total ? fmt(nc.pct) + "%" : "--"}</strong><em>${nc.total ? nc.aciertos + "/" + nc.total + " picks" : "0 picks verificados"}</em></div></div>`;
+  if (cu.total < MIN_MUESTRA_SOLIDA || nc.total < MIN_MUESTRA_SOLIDA) html += `<div style="padding:10px 20px 0"><span class="tag t-triple">Muestra chica, no concluyente</span><p class="note">Se considera sólida desde ${MIN_MUESTRA_SOLIDA} picks verificados en cada grupo. Backtest inicial: 71.4% contra 61.7%.</p></div>`;
+  else html += `<p class="note note-pad">Backtest inicial: 71.4% contra 61.7%.</p>`;
+
+  html += `<div class="foot">Análisis pre-partido. No garantiza resultados.<br>Diseñado y creado por Jose Torres.</div>`;
+  vistaEl.innerHTML = html;
+}
+
+// ---------- Hoja de liga ----------
+let ligaPeriodo = "todo";
+
+async function abrirLiga(ligaId) {
+  ligaPeriodo = "todo";
+  const filas = picksFiltrados().filter((p) => p.liga_id === ligaId);
+  if (!filas.length) return;
+  const nombreCompleto = filas[0].liga_nombre;
+  abrirSheet({ titulo: nombreCompleto.replace(/^[^-]+ - /, ""), sub: (nombreCompleto.match(/^([^-]+) - /) || [])[1] || "", body: '<div class="cargando">Cargando...</div>' });
+  const { data: res } = await supabaseClient.from("liga_resumen").select("*").eq("liga_id", ligaId).maybeSingle();
+  if (!$("sh-body")) return; // la cerraron mientras cargaba
+  $("sh-body").innerHTML = cuerpoLiga(ligaId, filas, res ? res.resumen : null);
+  enlazarPeriodo(ligaId, filas);
+}
+
+function filtrarPeriodo(filas) {
+  if (ligaPeriodo === "todo") return filas;
+  const dias = ligaPeriodo === "1s" ? 7 : 30;
+  const corte = hoyISO(-dias);
+  return filas.filter((p) => fechaColombia(p.fecha_partido) >= corte);
+}
+
+function graficaLigaHtml(filas) {
+  const gen = resumen(picksFiltrados());
+  const f = filtrarPeriodo(filas);
+  if (f.length < 2) return `<div class="vacio">Muy pocos picks en este periodo para dibujar la gráfica.</div>`;
+  let ac = 0;
+  const serie = f.map((p, i) => { ac += p.resultado ? 1 : 0; return (100 * ac) / (i + 1); });
+  const lo = Math.max(0, Math.min(...serie, gen.pct) - 10), hi = Math.min(100, Math.max(...serie, gen.pct) + 10);
+  return `<div class="chart-wrap">${graficaSplit(serie, gen.pct, { W: 350, H: 170, lo, hi, yt: [Math.round(lo / 10) * 10, Math.round(gen.pct), Math.round(hi / 10) * 10], fmtY: (t) => t + "%", padr: 44, xl: [[0, "pick 1"], [serie.length - 1, "pick " + serie.length]], aria: "Acierto acumulado de la liga" })}</div>
+    <p class="ill" style="padding-top:2px">Acierto acumulado pick a pick. La línea punteada es el acierto general (${fmt(gen.pct)}%).</p>`;
+}
+
+function enlazarPeriodo(ligaId, filas) {
+  document.querySelectorAll("[data-per]").forEach((b) => b.addEventListener("click", () => {
+    ligaPeriodo = b.dataset.per;
+    document.querySelectorAll("[data-per]").forEach((x) => x.classList.toggle("on", x === b));
+    $("liga-grafica").innerHTML = graficaLigaHtml(filas);
+  }));
+}
+
+function rachaActual(filas) {
+  if (!filas.length) return "--";
+  const ult = filas[filas.length - 1].resultado;
+  let n = 0;
+  for (let i = filas.length - 1; i >= 0 && filas[i].resultado === ult; i--) n++;
+  return `${n} ${ult ? (n === 1 ? "acierto" : "aciertos") : (n === 1 ? "fallo" : "fallos")}`;
+}
+
+function etiquetaRangoCuota(b, i, total) {
+  if (i === 0) return `${fmt(b.max, 2)} o menos`;
+  if (i === total - 1) return `${fmt(b.min, 2)} o más`;
+  return `${fmt(b.min, 2)} a ${fmt(b.max, 2)}`;
+}
+
+function cuerpoLiga(ligaId, filas, res) {
+  const todos = picksFiltrados();
+  const gen = resumen(todos);
+  const r = resumen(filas);
+  const d = r.pct - gen.pct;
+  const cp = cuotaProm(filas), roi = rendimiento(filas);
+  const cu = filas.filter((p) => p.cumple_filtro_triple === true);
+  const reglas = (buckets, esCuota) => (buckets || []).map((b, i, arr) =>
+    `<div class="tb c4r"><span>${esCuota ? etiquetaRangoCuota(b, i, arr.length) : esc(b.label)}</span><span class="r n">${b.n}</span><span class="r">${fmt(b.pct)}%</span><span class="r">${tagNivel(b.nivel)}</span></div>`).join("");
+
+  return `
+    <div class="blk" style="padding-top:12px"><div class="grande"><span class="n">${fmt(r.pct)}%</span><span class="bd ${r.total < MIN_PICKS_LIGA ? "n" : d >= 0 ? "g" : "r"}" style="margin:0">${signo(d)} pp</span></div>
+      <div class="note" style="margin-top:2px">${r.aciertos} de ${r.total} picks acertados. El recuadro compara con el promedio general (${fmt(gen.pct)}%).${r.total < MIN_PICKS_LIGA ? " Menos de " + MIN_PICKS_LIGA + " picks: no se interpreta." : ""}</div></div>
+    <div class="per"><button data-per="1s" class="">1S</button><button data-per="1m">1M</button><button data-per="todo" class="on">Todo</button></div>
+    <div id="liga-grafica" style="padding-top:4px">${graficaLigaHtml(filas)}</div>
+    <h3 class="h3" style="padding-top:16px">Datos de la liga</h3>
+    <div class="g3">
+      <div><small>Picks</small><b>${r.total}</b></div><div><small>Aciertos</small><b>${r.aciertos}</b></div><div><small>Fallos</small><b>${r.fallos}</b></div>
+      <div><small>Cuota prom.</small><b>${fmt(cp, 2)}</b></div><div><small>Equilibrio</small><b>${cp ? fmt(100 / cp) + "%" : "--"}</b></div><div><small>Rendimiento</small><b class="${claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</b></div>
+      <div><small>Racha actual</small><b style="font-size:14px">${rachaActual(filas)}</b></div><div><small>Goles esp. mediana</small><b>${res && res.mediana_goles_esperados !== null && res.mediana_goles_esperados !== undefined ? fmt(res.mediana_goles_esperados, 2) : "--"}</b></div><div><small>Filtro triple</small><b style="font-size:14px">${cu.length ? resumen(cu).aciertos + "/" + cu.length : "--"}</b></div>
+    </div>
+    ${res ? `<h3 class="h3">Historial de la liga<small>partidos jugados</small></h3>
+    <div class="g3"><div><small>Over 2.5, 2 años</small><b>${fmt(res.over25_2y)}%</b></div><div><small>Over 2.5, todo</small><b>${fmt(res.over25_todo)}%</b></div><div><small>Goles por partido</small><b>${fmt(res.goles_partido_2y, 2)}</b></div></div>
+    <p class="note note-pad">${res.partidos_2y} partidos en los últimos 2 años, ${res.partidos_todo} en todo el historial. Ventana de validación: ${esc(res.ventana_usada || "--")}.</p>
+    <h3 class="h3">Reglas por confianza<small>validadas en el bloque ciego</small></h3>
+    <div class="tb h c4r"><span>Rango</span><span class="r">N</span><span class="r">Acierto</span><span class="r">Nivel</span></div>${reglas(res.confidence_buckets, false)}
+    <h3 class="h3">Reglas por cuota</h3>
+    <div class="tb h c4r"><span>Rango</span><span class="r">N</span><span class="r">Acierto</span><span class="r">Nivel</span></div>${reglas(res.odds_buckets, true)}`
+    : `<div class="vacio" style="margin-top:18px">El resumen histórico de esta liga todavía no está disponible.</div>`}
+    <h3 class="h3">Picks de la liga<small>${r.total} verificados</small></h3>
+    <div class="blk"><div class="gm h h2"><span>Partido</span><span class="r">Marcador</span><span class="r"></span><span class="r">Resultado</span></div>
+    ${filas.slice().reverse().map((p) => `<div class="gm h2"><span>${esc(p.partido)}<br><small style="color:${C.apagado};font-size:12px">${fechaCorta(fechaColombia(p.fecha_partido))}, cuota ${fmt(p.cuota, 2)}</small></span><span class="r">${p.goles_local_final !== null && p.goles_local_final !== undefined ? p.goles_local_final + " - " + p.goles_visita_final : "--"}</span><span></span><span class="ov ${p.resultado ? "o" : "u"}">${p.resultado ? "Acertó" : "Falló"}</span></div>`).join("")}</div>`;
 }
