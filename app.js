@@ -289,15 +289,33 @@ function equipos(p) {
   return i < 0 ? [p.partido, ""] : [p.partido.slice(0, i), p.partido.slice(i + 4)];
 }
 
+// ---------- Escudos ----------
+// FootyStats da solo la ruta ("teams/germany-fc-bayern-munchen.png"); la imagen se sirve desde su CDN.
+// Si el escudo no existe o no carga, se queda un circulo gris con las iniciales del equipo.
+const CDN_ESCUDOS = "https://cdn.footystats.org/img/";
+function iniciales(nombre) {
+  const t = String(nombre || "").replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  if (!t.length) return "?";
+  if (t.length === 1) return t[0].slice(0, 2).toUpperCase();
+  return (t[0][0] + t[1][0]).toUpperCase();
+}
+function escudo(ruta, nombre) {
+  const img = ruta ? `<img class="esc-img" src="${CDN_ESCUDOS}${esc(ruta)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : "";
+  return `<span class="esc" aria-hidden="true"><span class="ini">${esc(iniciales(nombre))}</span>${img}</span>`;
+}
+// los eventos load/error de una imagen no "suben" por el arbol: se escuchan en la fase de captura
+document.addEventListener("error", (e) => { const t = e.target; if (t && t.classList && t.classList.contains("esc-img")) t.remove(); }, true);
+document.addEventListener("load", (e) => { const t = e.target; if (t && t.classList && t.classList.contains("esc-img") && t.parentNode) t.parentNode.classList.add("ok"); }, true);
+
 // Fila de un equipo con su minigrafica (goles totales de cada uno de sus ultimos 6
 // partidos por localia; linea punteada = 2.5; verde sobre 2.5, rojo bajo 2.5).
-function filaEquipo(nombre, ctx, anota, recibe, serie) {
+function filaEquipo(nombre, ctx, anota, recibe, serie, rutaEscudo) {
   const totales = Array.isArray(serie) ? serie.map((x) => x.total) : [];
   const conGrafica = totales.length >= 2;
   const over = totales.filter((t) => t >= 3).length;
   const cls = conGrafica ? (over / totales.length >= 4 / 6 - 1e-9 ? "hi" : "lo") : "";
   return `<div class="tm">
-    <div class="who"><b>${esc(nombre)}</b><small>${esc(ctx)}</small><small>Anota ${fmt(anota, 2)}, recibe ${fmt(recibe, 2)}</small></div>
+    <div class="who"><div class="quien">${escudo(rutaEscudo, nombre)}<b>${esc(nombre)}</b></div><small>${esc(ctx)}</small><small>Anota ${fmt(anota, 2)}, recibe ${fmt(recibe, 2)}</small></div>
     ${conGrafica ? graficaSplit(totales, 2.5, { W: 92, H: 40, aria: `Goles totales de los ultimos ${totales.length} partidos de ${nombre}` }) : "<span></span>"}
     <span class="val ${cls}">${conGrafica ? `${over}/${totales.length}` : "--"}</span>
   </div>`;
@@ -425,8 +443,8 @@ function renderDia() {
         <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}${tagValor(p)}<span class="hora">${horaCol(p.fecha_partido)}</span></div>
         <div class="teams"><b>${esc(p.partido)}</b>${mostrarLiga ? `<small class="liga-sub">${esc(p.liga_nombre)}</small>` : ""}</div>
         <div style="margin-top:6px">
-          ${filaEquipo(loc, "Local, últimos 6 de local", p.forma_local_anota, p.forma_local_recibe, p.ultimos_local)}
-          ${filaEquipo(vis, "Visitante, últimos 6 de visitante", p.forma_visita_anota, p.forma_visita_recibe, p.ultimos_visita)}
+          ${filaEquipo(loc, "Local, últimos 6 de local", p.forma_local_anota, p.forma_local_recibe, p.ultimos_local, p.escudo_local)}
+          ${filaEquipo(vis, "Visitante, últimos 6 de visitante", p.forma_visita_anota, p.forma_visita_recibe, p.ultimos_visita, p.escudo_visita)}
         </div>
         ${metricas(p)}
         <div class="valor-fila"><span>Valor vs mercado</span><b class="${v === null ? "mut" : v > 0 ? "pos" : "mut"}">${v === null ? "--" : signo(v) + " pp"}</b></div>
@@ -625,15 +643,15 @@ function abrirAyuda() {
 }
 
 // ---------- Hoja de detalle del partido ----------
-function bloqueEquipo(nombre, ctx, serie, anota, recibe) {
+function bloqueEquipo(nombre, ctx, serie, anota, recibe, rutaEscudo) {
   if (!Array.isArray(serie) || serie.length === 0) {
-    return `<div class="blk team-blk"><div class="cab"><b>${esc(nombre)}</b></div><div class="sub">${esc(ctx)}. Sin detalle guardado para este partido (se llena en los análisis nuevos).</div></div>`;
+    return `<div class="blk team-blk"><div class="cab"><span class="quien">${escudo(rutaEscudo, nombre)}<b>${esc(nombre)}</b></span></div><div class="sub">${esc(ctx)}. Sin detalle guardado para este partido (se llena en los análisis nuevos).</div></div>`;
   }
   const tot = serie.map((x) => x.total);
   const over = tot.filter((t) => t >= 3).length;
   const filas = serie.map((x) => `<div class="gm"><span>${esc(x.rival)}<br><small style="color:${C.apagado};font-size:12px">${fechaCorta(x.fecha)}</small></span><span class="r">${x.favor} - ${x.contra}</span><span class="r">${x.total}</span><span class="ov ${x.total >= 3 ? "o" : "u"}">${x.total >= 3 ? "Over" : "Under"}</span></div>`).join("");
   const grafica = tot.length >= 2 ? graficaSplit(tot, 2.5, { W: 350, H: 120, lo: 0, hi: Math.max(8, ...tot) + 1, yt: [0, 2.5, 5, 8], padr: 40, xl: [[0, "más antiguo"], [tot.length - 1, "último"]], aria: `Goles totales de ${nombre}` }) : "";
-  return `<div class="blk team-blk"><div class="cab"><b>${esc(nombre)}</b><span>${over} de ${tot.length} Over</span></div>
+  return `<div class="blk team-blk"><div class="cab"><span class="quien">${escudo(rutaEscudo, nombre)}<b>${esc(nombre)}</b></span><span>${over} de ${tot.length} Over</span></div>
     <div class="sub">${esc(ctx)}. Anota ${fmt(anota, 2)} y recibe ${fmt(recibe, 2)} en promedio.</div>
     ${grafica}
     <div class="gm h"><span>Rival</span><span class="r">Marcador</span><span class="r">Goles</span><span class="r">Resultado</span></div>${filas}</div>`;
@@ -680,8 +698,8 @@ function abrirPartido(id) {
       ${chk(cGoles, "Goles esperados, más de 3.0", p.goles_esperados !== null && p.goles_esperados !== undefined ? fmt(p.goles_esperados, 2) : "--")}
     </div>
     <h3 class="h3">Contexto<small>no decide, solo informa</small></h3>
-    ${bloqueEquipo(loc, "Como local", p.ultimos_local, p.forma_local_anota, p.forma_local_recibe)}
-    ${bloqueEquipo(vis, "Como visitante", p.ultimos_visita, p.forma_visita_anota, p.forma_visita_recibe)}
+    ${bloqueEquipo(loc, "Como local", p.ultimos_local, p.forma_local_anota, p.forma_local_recibe, p.escudo_local)}
+    ${bloqueEquipo(vis, "Como visitante", p.ultimos_visita, p.forma_visita_anota, p.forma_visita_recibe, p.escudo_visita)}
     <h3 class="h3">Enfrentamientos directos</h3>
     <div class="blk">${Array.isArray(p.h2h) && p.h2h.length ? `<div class="gm h"><span>Partido</span><span class="r">Marcador</span><span class="r">Goles</span><span class="r">Resultado</span></div>` + p.h2h.map((x) => `<div class="gm"><span>${fechaCorta(x.fecha)}<br><small style="color:${C.apagado};font-size:12px">${esc(x.local)} vs ${esc(x.visita)}</small></span><span class="r">${x.goles_local} - ${x.goles_visita}</span><span class="r">${x.total}</span><span class="ov ${x.total >= 3 ? "o" : "u"}">${x.total >= 3 ? "Over" : "Under"}</span></div>`).join("") : '<div class="vacio" style="margin:0">Sin enfrentamientos directos registrados.</div>'}</div>
     <h3 class="h3">Mercado</h3>
@@ -895,7 +913,7 @@ function renderResultados() {
         : `<span class="tag ${p.resultado ? "t-gain" : "t-loss"}" style="margin-left:auto">${p.resultado ? "Acertó" : "Falló"}</span>`;
       html += `<div class="match${triple ? " triple" : ""}" style="cursor:default">
         <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}${etiqueta}</div>
-        <div class="res-top"><div class="teams"><b style="font-size:15px;line-height:20px">${esc(loc)}<br>${esc(vis)}</b></div><span class="score">${tiene ? p.goles_local_final + " - " + p.goles_visita_final : "--"}</span></div>
+        <div class="res-top"><div class="teams"><div class="res-eq">${escudo(p.escudo_local, loc)}<b>${esc(loc)}</b></div><div class="res-eq">${escudo(p.escudo_visita, vis)}<b>${esc(vis)}</b></div></div><span class="score">${tiene ? p.goles_local_final + " - " + p.goles_visita_final : "--"}</span></div>
         <div class="kvs"><div>Mercado</div><div class="r">Over 2.5</div><div>Cuota</div><div class="r">${fmt(p.cuota, 2)}</div>
           ${pendiente ? `<div>Estado</div><div class="r">${porJugar ? "Empieza " + horaCol(p.fecha_partido) : "Esperando resultado"}</div>` : `<div>Goles totales</div><div class="r">${tiene ? p.goles_local_final + p.goles_visita_final : "--"}</div>`}</div>
       </div>`;
