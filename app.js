@@ -164,6 +164,7 @@ async function terminarSplash() {
 setTimeout(terminarSplash, DURACION_SPLASH_MS);
 
 function mostrarLogin() {
+  detenerRefrescoResultados();
   cerrarSheet();
   loginScreen.style.display = "flex";
   mainApp.style.display = "none";
@@ -209,6 +210,7 @@ let vistaActual = "hoy";
 
 function ir(vista) {
   vistaActual = vista;
+  detenerRefrescoResultados();
   navBtns.forEach((b) => b.classList.toggle("on", b.dataset.vista === vista));
   cerrarSheet();
   window.scrollTo(0, 0);
@@ -642,22 +644,37 @@ function bindAnalizar() {
 }
 
 // ================== RESULTADOS ==================
+// Muestra HOY (se va llenando a medida que FootyStats publica cada resultado) y los
+// ultimos 4 dias. La pantalla se refresca sola cada minuto mientras esta abierta en "Hoy".
 let datosResultadosPorDia = {};
 let combMetodoRes = {};
 let miCombRes = {};
 let diaResultadoActivo = null;
+let resultadosTimer = null;
+let resultadosActualizado = null;
+const REFRESCO_RESULTADOS_MS = 60 * 1000;
 
-async function cargarResultados() {
-  vistaEl.innerHTML = titulo("Resultados", "Últimos 4 días", false) + '<div class="cargando">Cargando...</div>';
-  builderSlot.innerHTML = "";
+function detenerRefrescoResultados() {
+  if (resultadosTimer) { clearInterval(resultadosTimer); resultadosTimer = null; }
+}
+
+async function cargarResultados(silencioso) {
+  const hoy = hoyISO(0);
+  if (!silencioso) {
+    vistaEl.innerHTML = titulo("Resultados", "Hoy y los últimos 4 días", false) + '<div class="cargando">Cargando...</div>';
+    builderSlot.innerHTML = "";
+  }
   const desde = hoyISO(-4);
   const [pk, cm, mc] = await Promise.all([
-    supabaseClient.from("picks").select("*").gte("fecha_partido", desde + "T00:00:00-05:00").lte("fecha_partido", new Date().toISOString()).order("fecha_partido", { ascending: false }),
+    supabaseClient.from("picks").select("*").gte("fecha_partido", desde + "T00:00:00-05:00").lte("fecha_partido", hoy + "T23:59:59-05:00").order("fecha_partido", { ascending: true }),
     supabaseClient.from("combinada_dia").select("*").gte("fecha", desde),
     supabaseClient.from("mi_combinada").select("*").gte("fecha", desde),
   ]);
   if (vistaActual !== "resultados") return;
-  if (pk.error) { vistaEl.innerHTML = titulo("Resultados", "Últimos 4 días", false) + `<div class="vacio">Error leyendo resultados: ${esc(pk.error.message)}</div>`; return; }
+  if (pk.error) {
+    if (!silencioso) vistaEl.innerHTML = titulo("Resultados", "Hoy y los últimos 4 días", false) + `<div class="vacio">Error leyendo resultados: ${esc(pk.error.message)}</div>`;
+    return;
+  }
 
   datosResultadosPorDia = {};
   (pk.data || []).filter(esSenal).forEach((p) => {
@@ -667,10 +684,17 @@ async function cargarResultados() {
   combMetodoRes = {}; miCombRes = {};
   (cm.data || []).forEach((c) => { if (!c.mensaje && c.picks) combMetodoRes[c.fecha] = c; });
   (mc.data || []).forEach((c) => { miCombRes[c.fecha] = c; });
+  resultadosActualizado = new Date();
 
-  const dias = Object.keys(datosResultadosPorDia).filter((d) => datosResultadosPorDia[d].some((p) => p.resultado !== null)).sort().reverse();
-  diaResultadoActivo = dias[0] || null;
+  // al entrar se abre "Hoy"; en un refresco silencioso se respeta el dia que el usuario eligio
+  if (!silencioso || !diaResultadoActivo) diaResultadoActivo = hoy;
   renderResultados();
+
+  if (!resultadosTimer) {
+    resultadosTimer = setInterval(() => {
+      if (vistaActual === "resultados" && diaResultadoActivo === hoyISO(0) && !sheetRoot.innerHTML) cargarResultados(true);
+    }, REFRESCO_RESULTADOS_MS);
+  }
 }
 
 function resultadoPata(liga_id, partido, fecha) {
@@ -685,22 +709,41 @@ function tagCombinada(rs) {
   return '<span class="tag t-muted">Pendiente</span>';
 }
 
-function renderResultados() {
-  let html = titulo("Resultados", "Últimos 4 días", false);
-  const dias = Object.keys(datosResultadosPorDia).filter((d) => datosResultadosPorDia[d].some((p) => p.resultado !== null)).sort().reverse();
-  if (!dias.length) {
-    vistaEl.innerHTML = html + '<div class="vacio">Todavía no hay resultados verificados en los últimos días.</div>';
-    return;
+function diasDeResultados() {
+  const hoy = hoyISO(0);
+  const dias = [];
+  for (let i = -4; i <= 0; i++) {
+    const d = hoyISO(i);
+    const lista = datosResultadosPorDia[d] || [];
+    if (d === hoy || lista.some((p) => p.resultado !== null)) dias.push(d); // hoy siempre aparece
   }
+  return dias; // del mas antiguo al mas reciente: Hoy queda al final (a la derecha)
+}
+
+function renderResultados() {
+  const hoy = hoyISO(0);
+  const esHoy = diaResultadoActivo === hoy;
+  const sub = esHoy && resultadosActualizado ? `Actualizado ${resultadosActualizado.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Bogota" })}, se refresca solo cada minuto` : "Hoy y los últimos 4 días";
+  let html = titulo("Resultados", sub, false);
+
+  const dias = diasDeResultados();
   html += '<div class="days">' + dias.map((d) => {
-    const ver = datosResultadosPorDia[d].filter((p) => p.resultado !== null);
+    const lista = datosResultadosPorDia[d] || [];
+    const ver = lista.filter((p) => p.resultado !== null);
     const ac = ver.filter((p) => p.resultado === true).length;
-    return `<button class="day${d === diaResultadoActivo ? " on" : ""}" data-dia="${d}">${etiquetaDiaCorta(d)}<small>${ac} de ${ver.length}</small></button>`;
+    let detalle;
+    if (ver.length) detalle = `${ac} de ${ver.length}`;
+    else if (lista.length) detalle = `${lista.length} pend.`;
+    else detalle = "sin partidos";
+    return `<button class="day${d === diaResultadoActivo ? " on" : ""}" data-dia="${d}">${d === hoy ? "Hoy" : etiquetaDiaCorta(d)}<small>${detalle}</small></button>`;
   }).join("") + "</div>";
 
   const d = diaResultadoActivo;
-  const picks = (datosResultadosPorDia[d] || []).filter((p) => p.resultado !== null);
-  const ac = picks.filter((p) => p.resultado === true).length;
+  const lista = datosResultadosPorDia[d] || [];
+  const picks = esHoy ? lista : lista.filter((p) => p.resultado !== null);
+  const ver = picks.filter((p) => p.resultado !== null);
+  const pend = picks.length - ver.length;
+  const ac = ver.filter((p) => p.resultado === true).length;
 
   // combinadas del dia: metodo y mi criterio
   const cm = combMetodoRes[d], mc = miCombRes[d];
@@ -709,12 +752,20 @@ function renderResultados() {
     return `<div class="legs resumen"><b style="font-weight:600">${nombre}</b><span>cuota ${fmt(cuota, 2)} ${tagCombinada(rs)}</span></div>` +
       patas.map((x, i) => `<div class="legs"><span>${esc(x.partido)}</span>${tagPata(rs[i])}</div>`).join("");
   };
-  html += `<div class="sec"><h2>Combinadas del día</h2><span>${etiquetaDiaLarga(d)}</span></div><div class="card">` +
+  html += `<div class="sec"><h2>Combinadas del día</h2><span>${esc(etiquetaDiaLarga(d))}</span></div><div class="card">` +
     (cm ? bloque("Método", cm.picks || [], cm.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Método</b><span>sin combinada ese día</span></div>`) +
     (mc ? bloque("Mi criterio", (mc.patas || []).map((x) => ({ liga_id: x.liga_id, partido: x.partido })), mc.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Mi criterio</b><span>sin apuesta confirmada</span></div>`) +
     "</div>";
 
-  html += `<div class="sec"><h2>Partidos con señal</h2><span>${ac} de ${picks.length} acertado${ac === 1 ? "" : "s"}</span></div>`;
+  const resumenTxt = esHoy
+    ? (picks.length ? `${ac} de ${ver.length} acertado${ver.length === 1 ? "" : "s"}, ${pend} pendiente${pend === 1 ? "" : "s"}` : "")
+    : `${ac} de ${picks.length} acertado${ac === 1 ? "" : "s"}`;
+  html += `<div class="sec"><h2>Partidos con señal</h2><span>${resumenTxt}</span></div>`;
+
+  if (!picks.length) {
+    html += `<div class="vacio">${esHoy ? "Hoy no hay partidos con señal." : "No hay partidos con señal verificados este día."}</div>`;
+  }
+
   const porLiga = {};
   picks.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
   Object.keys(porLiga).sort().forEach((liga) => {
@@ -722,16 +773,25 @@ function renderResultados() {
     porLiga[liga].forEach((p) => {
       const triple = p.cumple_filtro_triple === true;
       const [loc, vis] = equipos(p);
+      const pendiente = p.resultado === null || p.resultado === undefined;
       const tiene = p.goles_local_final !== null && p.goles_local_final !== undefined;
+      const porJugar = new Date(p.fecha_partido).getTime() > Date.now();
+      const etiqueta = pendiente ? '<span class="tag t-muted" style="margin-left:auto">Pendiente</span>'
+        : `<span class="tag ${p.resultado ? "t-gain" : "t-loss"}" style="margin-left:auto">${p.resultado ? "Acertó" : "Falló"}</span>`;
       html += `<div class="match${triple ? " triple" : ""}" style="cursor:default">
-        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}<span class="tag ${p.resultado ? "t-gain" : "t-loss"}" style="margin-left:auto">${p.resultado ? "Acertó" : "Falló"}</span></div>
+        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}${etiqueta}</div>
         <div class="res-top"><div class="teams"><b style="font-size:15px;line-height:20px">${esc(loc)}<br>${esc(vis)}</b></div><span class="score">${tiene ? p.goles_local_final + " - " + p.goles_visita_final : "--"}</span></div>
-        <div class="kvs"><div>Mercado</div><div class="r">Over 2.5</div><div>Cuota</div><div class="r">${fmt(p.cuota, 2)}</div><div>Goles totales</div><div class="r">${tiene ? p.goles_local_final + p.goles_visita_final : "--"}</div></div>
+        <div class="kvs"><div>Mercado</div><div class="r">Over 2.5</div><div>Cuota</div><div class="r">${fmt(p.cuota, 2)}</div>
+          ${pendiente ? `<div>Estado</div><div class="r">${porJugar ? "Empieza " + horaCol(p.fecha_partido) : "Esperando resultado"}</div>` : `<div>Goles totales</div><div class="r">${tiene ? p.goles_local_final + p.goles_visita_final : "--"}</div>`}</div>
       </div>`;
     });
   });
   html += `<div class="foot">Solo se muestran partidos con señal. Un resultado aislado no cambia las reglas: se evalúa el acumulado.</div>`;
   vistaEl.innerHTML = html;
+
+  // dejar visible el dia elegido dentro de la fila de dias
+  const fila = vistaEl.querySelector(".days"), activo = vistaEl.querySelector(".day.on");
+  if (fila && activo) fila.scrollLeft = activo.offsetLeft - fila.clientWidth / 2 + activo.clientWidth / 2;
 }
 
 // ================== ESTADISTICAS ==================
