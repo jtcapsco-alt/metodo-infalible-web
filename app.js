@@ -89,6 +89,8 @@ function unidades(filas) {
 }
 function rendimiento(filas) { return filas.length ? (100 * unidades(filas)) / filas.length : null; }
 function cuotaProm(filas) { return filas.length ? filas.reduce((s, f) => s + Number(f.cuota), 0) / filas.length : null; }
+function probImplicita(filas) { return filas.length ? (100 * filas.reduce((s, f) => s + 1 / Number(f.cuota), 0)) / filas.length : null; }
+function ventajaPP(filas) { const r = resumen(filas); const pi = probImplicita(filas); return r.pct === null || pi === null ? null : r.pct - pi; }
 function claseSigno(x) { return x === null || x === undefined ? "mut" : x < 0 ? "neg" : x > 0 ? "pos" : ""; }
 
 // ================== GRAFICAS (SVG propio, sin librerias) ==================
@@ -145,7 +147,7 @@ function graficaLineas(series, nFechas, o = {}) {
   series.forEach((se) => {
     if (!se.pts.length) return;
     const pts = se.pts.map((p) => `${X(p.x)},${Y(p.y)}`).join(" ");
-    s += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${se.dash ? ` stroke-dasharray="${se.dash}"` : ""}/>`;
+    s += `<polyline points="${pts}" fill="none" stroke="${se.color}" stroke-width="${se.w || 2}" stroke-linejoin="round" stroke-linecap="round"${se.dash ? ` stroke-dasharray="${se.dash}"` : ""}/>`;
     const u = se.pts[se.pts.length - 1];
     s += `<circle cx="${X(u.x)}" cy="${Y(u.y)}" r="3.5" fill="${se.color}"/><text x="${X(u.x) + 8}" y="${Y(u.y) + 4}" font-size="11" font-weight="600" fill="${se.color}">${signo(u.y, 1)}</text>`;
   });
@@ -273,6 +275,9 @@ function tagNivel(nivel) {
   if (nivel === "MUESTRA_INSUFICIENTE") return '<span class="tag t-muted">Poca muestra</span>';
   return '<span class="tag t-muted">Sin señal</span>';
 }
+function esValorPositivo(p) { return p.valor_vs_mercado !== null && p.valor_vs_mercado !== undefined && Number(p.valor_vs_mercado) > 0; }
+function valorPP(p) { return p.valor_vs_mercado === null || p.valor_vs_mercado === undefined ? null : Number(p.valor_vs_mercado) * 100; }
+function tagValor(p) { return esValorPositivo(p) ? `<span class="tag t-gain">Valor ${signo(valorPP(p))} pp</span>` : ""; }
 const TAG_TRIPLE = '<span class="tag t-triple">Filtro triple</span>';
 const ICO_ARRIBA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6l6 6"/></svg>';
 const ICO_CHECK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B7A55" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10-10"/></svg>';
@@ -315,6 +320,8 @@ let picksDia = [];
 let combMetodoDia = null;
 let miCombDia = null;
 let seleccion = [];
+let ordenDia = "liga";        // "liga" (agrupado, como siempre) | "valor" (ordenado por valor vs mercado)
+let combValorDia = null;
 
 async function cargarDia(off) {
   diaOffset = off;
@@ -324,10 +331,11 @@ async function cargarDia(off) {
   vistaEl.innerHTML = titulo(off === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true) + '<div class="cargando">Cargando...</div>';
   bindAnalizar();
 
-  const [pk, cm, mc] = await Promise.all([
+  const [pk, cm, mc, cv] = await Promise.all([
     supabaseClient.from("picks").select("*").gte("fecha_partido", fecha + "T00:00:00-05:00").lte("fecha_partido", fecha + "T23:59:59-05:00").order("fecha_partido", { ascending: true }),
     supabaseClient.from("combinada_dia").select("*").eq("fecha", fecha).maybeSingle(),
     supabaseClient.from("mi_combinada").select("*").eq("fecha", fecha).maybeSingle(),
+    supabaseClient.from("combinada_valor").select("*").eq("fecha", fecha).maybeSingle(),
   ]);
   if (vistaActual !== (off === 0 ? "hoy" : "manana")) return; // el usuario ya cambio de pantalla
   if (pk.error) {
@@ -338,6 +346,7 @@ async function cargarDia(off) {
   picksDia = (pk.data || []).filter(esSenal);
   combMetodoDia = !cm.error && cm.data && !cm.data.mensaje ? cm.data : null;
   miCombDia = !mc.error && mc.data ? mc.data : null;
+  combValorDia = !cv.error && cv.data ? cv.data : null;
   renderDia();
 }
 
@@ -362,6 +371,7 @@ function botonAgregar(p, ctx) {
 function renderDia() {
   const fecha = hoyISO(diaOffset);
   const nTriple = picksDia.filter((p) => p.cumple_filtro_triple === true).length;
+  const nValor = picksDia.filter(esValorPositivo).length;
   let html = titulo(diaOffset === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true);
 
   if (picksDia.length === 0) {
@@ -372,7 +382,8 @@ function renderDia() {
     return;
   }
 
-  html += `<div class="sec" style="padding-top:14px"><h2>${picksDia.length} partido${picksDia.length === 1 ? "" : "s"} con señal</h2><span>${nTriple} cumple${nTriple === 1 ? "" : "n"} el filtro triple</span></div>`;
+  html += `<div class="sec" style="padding-top:14px"><h2>${picksDia.length} partido${picksDia.length === 1 ? "" : "s"} con señal</h2><span>${nTriple} con filtro triple, ${nValor} con valor positivo</span></div>
+    <div class="ayuda-fila"><button class="link-btn" data-ayuda="1">Cómo leer esta pantalla</button></div>`;
 
   // --- combinada del metodo ---
   if (combMetodoDia) {
@@ -384,35 +395,54 @@ function renderDia() {
     html += `<div class="card"><div class="card-h"><h3>Combinada del método</h3><span>sin combinada todavía</span></div></div>`;
   }
 
+  // --- combinada por valor ---
+  if (combValorDia) {
+    const patas = combValorDia.picks || [];
+    html += `<div class="card"><div class="card-h"><h3>Combinada por valor</h3><span>${patas.length} patas, cuota total ${fmt(combValorDia.cuota_total, 2)}</span></div>
+      ${patas.map((x) => `<div class="legs"><span>${esc(x.partido)}${x.triple ? " " + TAG_TRIPLE : ""}</span><b style="font-weight:600">${fmt(x.cuota, 2)} <small class="${x.valor_pp > 0 ? "pos" : "mut"}">${signo(x.valor_pp)} pp</small></b></div>`).join("")}
+      <div class="legs resumen"><span>Valor total</span><b style="font-weight:600" class="${combValorDia.valor_total > 0 ? "pos" : "mut"}">${signo(combValorDia.valor_total)} pp</b></div>
+      ${miCombDia ? "" : `<div class="legs accion"><button class="pickb" data-cargar-valor="1" style="width:100%">Cargar estas 2 patas en mi combinada</button></div>`}</div>`;
+  } else {
+    html += `<div class="card"><div class="card-h"><h3>Combinada por valor</h3><span>sin pareja de valor todavía</span></div></div>`;
+  }
+
   // --- mi combinada confirmada ---
   if (miCombDia) {
     const patas = miCombDia.patas || [];
     html += `<div class="card fuerte"><div class="card-h"><h3>Mi combinada</h3><span>confirmada ${horaCol(miCombDia.confirmada_en)}</span></div>
       ${patas.map((x) => `<div class="legs"><span>${esc(x.partido)}</span><b style="font-weight:600">${fmt(x.cuota, 2)}</b></div>`).join("")}
-      <div class="legs resumen"><span>Cuota total</span><b style="font-weight:600">${fmt(miCombDia.cuota_total, 2)}</b></div></div>`;
+      <div class="legs resumen"><span>Cuota total${miCombDia.cuota_real_total ? " (real)" : ""}${miCombDia.casa ? ", " + esc(miCombDia.casa) : ""}</span><b style="font-weight:600">${fmt(miCombDia.cuota_real_total || miCombDia.cuota_total, 2)}</b></div></div>`;
   }
 
-  // --- partidos agrupados por liga ---
-  const porLiga = {};
-  picksDia.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
-  html += `<div class="sec" style="padding-bottom:8px"><h2>Partidos</h2><span>agrupados por liga</span></div>`;
-  Object.keys(porLiga).sort().forEach((liga) => {
-    html += `<div class="band">${esc(liga)}</div>`;
-    porLiga[liga].forEach((p) => {
-      const [loc, vis] = equipos(p);
-      const triple = p.cumple_filtro_triple === true;
-      html += `<div class="match${triple ? " triple" : ""}" data-abrir="${p.id}" tabindex="0">
-        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}<span class="hora">${horaCol(p.fecha_partido)}</span></div>
-        <div class="teams"><b>${esc(p.partido)}</b></div>
+  // --- partidos: agrupados por liga, o todos ordenados por valor vs mercado ---
+  html += `<div class="sec" style="padding-bottom:8px"><h2>Partidos</h2><span>${ordenDia === "valor" ? "de mayor a menor valor" : "agrupados por liga"}</span></div>
+    <div class="seg" style="margin-top:0;margin-bottom:12px"><button data-orden="liga" class="${ordenDia === "liga" ? "on" : ""}">Agrupar por liga</button><button data-orden="valor" class="${ordenDia === "valor" ? "on" : ""}">Ordenar por valor</button></div>`;
+  const tarjeta = (p, mostrarLiga) => {
+    const [loc, vis] = equipos(p);
+    const triple = p.cumple_filtro_triple === true;
+    const v = valorPP(p);
+    return `<div class="match${triple ? " triple" : ""}" data-abrir="${p.id}" tabindex="0">
+        <div class="tags">${tagNivel(p.nivel)}${triple ? TAG_TRIPLE : ""}${tagValor(p)}<span class="hora">${horaCol(p.fecha_partido)}</span></div>
+        <div class="teams"><b>${esc(p.partido)}</b>${mostrarLiga ? `<small class="liga-sub">${esc(p.liga_nombre)}</small>` : ""}</div>
         <div style="margin-top:6px">
           ${filaEquipo(loc, "Local, últimos 6 de local", p.forma_local_anota, p.forma_local_recibe, p.ultimos_local)}
           ${filaEquipo(vis, "Visitante, últimos 6 de visitante", p.forma_visita_anota, p.forma_visita_recibe, p.ultimos_visita)}
         </div>
         ${metricas(p)}
+        <div class="valor-fila"><span>Valor vs mercado</span><b class="${v === null ? "mut" : v > 0 ? "pos" : "mut"}">${v === null ? "--" : signo(v) + " pp"}</b></div>
         <div class="mrow"><span class="ver">Ver análisis completo ${ICO_ARRIBA}</span>${botonAgregar(p, "lista")}</div>
       </div>`;
+  };
+  if (ordenDia === "valor") {
+    picksDia.slice().sort((a, b) => (valorPP(b) === null ? -999 : valorPP(b)) - (valorPP(a) === null ? -999 : valorPP(a))).forEach((p) => { html += tarjeta(p, true); });
+  } else {
+    const porLiga = {};
+    picksDia.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
+    Object.keys(porLiga).sort().forEach((liga) => {
+      html += `<div class="band">${esc(liga)}</div>`;
+      porLiga[liga].forEach((p) => { html += tarjeta(p, false); });
     });
-  });
+  }
   html += `<div class="foot">Análisis pre-partido. No garantiza resultados. La gestión de la banca es tu responsabilidad.<br>Diseñado y creado por Jose Torres.</div>`;
   vistaEl.innerHTML = html;
   bindAnalizar();
@@ -425,6 +455,12 @@ vistaEl.addEventListener("click", (e) => {
   if (add) { e.stopPropagation(); alternarSeleccion(parseInt(add.dataset.add, 10)); return; }
   const card = e.target.closest("[data-abrir]");
   if (card) abrirPartido(parseInt(card.dataset.abrir, 10));
+  const ord = e.target.closest("[data-orden]");
+  if (ord) { ordenDia = ord.dataset.orden; renderDia(); return; }
+  const cvb = e.target.closest("[data-cargar-valor]");
+  if (cvb) { cargarParejaValor(); return; }
+  const ay = e.target.closest("[data-ayuda]");
+  if (ay) { abrirAyuda(); return; }
   const liga = e.target.closest("[data-liga]");
   if (liga) abrirLiga(liga.dataset.liga);
   const dia = e.target.closest("[data-dia]");
@@ -437,6 +473,23 @@ vistaEl.addEventListener("keydown", (e) => {
   const card = e.target.closest && e.target.closest("[data-abrir]");
   if (card && e.target === card) abrirPartido(parseInt(card.dataset.abrir, 10));
 });
+
+function cargarParejaValor() {
+  if (!combValorDia || miCombDia) return;
+  const nuevas = [];
+  (combValorDia.picks || []).forEach((x) => {
+    const p = picksDia.find((q) => q.liga_id === x.liga_id && q.partido === x.partido);
+    if (p && !yaEmpezo(p)) nuevas.push(p);
+  });
+  if (nuevas.length < 2) {
+    const m = $("analizar-mensaje");
+    if (m) m.textContent = "Uno de los partidos de la combinada por valor ya empezó o no está en la lista. Arma tu combinada a mano.";
+    return;
+  }
+  seleccion = nuevas;
+  renderDia();
+  window.scrollTo(0, 0);
+}
 
 function alternarSeleccion(id) {
   const p = picksDia.find((x) => x.id === id);
@@ -474,36 +527,70 @@ function probEstimada(picks) {
   return Math.round(((pcts[0] * pcts[1]) / 100) * 10) / 10;
 }
 
+function leerCuota(txt) {
+  if (txt === null || txt === undefined || String(txt).trim() === "") return null;
+  const n = parseFloat(String(txt).replace(",", "."));
+  return isNaN(n) ? NaN : n;
+}
+
 function abrirConfirmar() {
   if (seleccion.length !== 2) return;
   const total = cuotaTotalSel();
   const prob = probEstimada(seleccion);
-  const equil = 100 / total;
   const body = `<div class="blk" style="padding-top:8px">
-      ${seleccion.map((p) => `<div class="legs" style="padding-left:0;padding-right:0"><div><b style="font-weight:600">${esc(p.partido)}</b><br><span style="font-size:12px">Over 2.5, ${horaCol(p.fecha_partido)}</span></div><b style="font-weight:600">${fmt(p.cuota, 2)}</b></div>`).join("")}
+      ${seleccion.map((p, i) => `<div class="legs" style="padding-left:0;padding-right:0"><div><b style="font-weight:600">${esc(p.partido)}</b><br><span style="font-size:12px">Over 2.5, ${horaCol(p.fecha_partido)}. Cuota de referencia ${fmt(p.cuota, 2)}</span></div>
+        <input class="inp" id="real-${i}" inputmode="decimal" placeholder="${fmt(p.cuota, 2)}" aria-label="Cuota real que te dieron en ${esc(p.partido)}" autocomplete="off"></div>`).join("")}
+      <p class="note" style="margin-top:6px">Cuota real: la que te dio tu casa. Es opcional, pero con ella el rendimiento se mide con lo que de verdad pagan. Pon las dos o ninguna.</p>
+      <input class="inp inp-casa" id="casa" type="text" maxlength="60" placeholder="Casa de apuestas (opcional)" aria-label="Casa de apuestas" autocomplete="off">
     </div>
     <div class="g3" style="margin-top:12px">
-      <div><small>Cuota total</small><b>${fmt(total, 2)}</b></div>
+      <div><small id="lbl-total">Cuota total</small><b id="val-total">${fmt(total, 2)}</b></div>
       <div><small>Prob. estimada</small><b>${prob !== null ? fmt(prob) + "%" : "--"}</b></div>
-      <div><small>Equilibrio</small><b>${fmt(equil)}%</b></div>
+      <div><small>Equilibrio</small><b id="val-equil">${fmt(100 / total)}%</b></div>
     </div>
-    <p class="note note-pad">La probabilidad estimada multiplica el acierto histórico de la regla de cada pata.${prob !== null && prob < equil ? " Está por debajo del equilibrio: según el método, esta combinada pierde a largo plazo." : ""}</p>
+    <p class="note note-pad" id="nota-confirmar">La probabilidad estimada multiplica el acierto histórico de la regla de cada pata.</p>
     <div class="blk" style="margin-top:14px"><div class="warn">Al confirmar, la apuesta queda guardada y no se puede editar ni borrar. Es la que se mide contra la combinada del método.</div>
     <p class="err" id="confirmar-error"></p></div>`;
   abrirSheet({
     titulo: "Confirmar apuesta", sub: `Tu combinada de ${diaOffset === 0 ? "hoy" : "mañana"}, ${etiquetaDiaLarga(hoyISO(diaOffset))}`, body, corto: true,
     footer: '<button class="btn" id="btn-confirmar">Confirmar apuesta</button><button class="btn2" id="btn-seguir">Seguir editando</button>',
   });
+  const refrescar = () => {
+    const a = leerCuota($("real-0").value), b = leerCuota($("real-1").value);
+    const ok = a !== null && b !== null && !isNaN(a) && !isNaN(b) && a > 1 && b > 1;
+    const t = ok ? Math.round(a * b * 100) / 100 : total;
+    $("lbl-total").textContent = ok ? "Cuota total real" : "Cuota total";
+    $("val-total").textContent = fmt(t, 2);
+    $("val-equil").textContent = fmt(100 / t) + "%";
+    const dif = ok ? ((t / total) - 1) * 100 : null;
+    let nota = "La probabilidad estimada multiplica el acierto histórico de la regla de cada pata.";
+    if (prob !== null && prob < 100 / t) nota += " Está por debajo del equilibrio: según el método, esta combinada pierde a largo plazo.";
+    if (dif !== null && dif < -3) nota += ` Tu cuota real es ${fmt(Math.abs(dif), 1)}% menor que la de referencia: la ventaja esperada del valor positivo se reduce o desaparece.`;
+    $("nota-confirmar").textContent = nota;
+  };
+  $("real-0").addEventListener("input", refrescar);
+  $("real-1").addEventListener("input", refrescar);
   $("btn-seguir").addEventListener("click", cerrarSheet);
   $("btn-confirmar").addEventListener("click", () => confirmarApuesta(prob));
 }
 
 async function confirmarApuesta(prob) {
   const btn = $("btn-confirmar"), errEl = $("confirmar-error");
-  btn.disabled = true; btn.textContent = "Guardando...";
   errEl.textContent = "";
-  const patas = seleccion.map((p) => ({ liga_id: p.liga_id, partido: p.partido, fecha_partido: p.fecha_partido, cuota: Number(p.cuota) }));
-  const { error } = await supabaseClient.from("mi_combinada").insert({ patas, probabilidad_estimada: prob });
+  const a = leerCuota($("real-0").value), b = leerCuota($("real-1").value);
+  const hayA = a !== null, hayB = b !== null;
+  if (hayA !== hayB) { errEl.textContent = "Pon la cuota real de las dos patas, o deja las dos vacías."; return; }
+  if (hayA && (isNaN(a) || isNaN(b) || a <= 1 || b <= 1 || a > 30 || b > 30)) { errEl.textContent = "La cuota real debe ser un número entre 1.01 y 30."; return; }
+  btn.disabled = true; btn.textContent = "Guardando...";
+  const patas = seleccion.map((p, i) => {
+    const o = { liga_id: p.liga_id, partido: p.partido, fecha_partido: p.fecha_partido, cuota: Number(p.cuota) };
+    if (hayA) o.cuota_real = i === 0 ? a : b;
+    return o;
+  });
+  const casa = ($("casa").value || "").trim();
+  const fila = { patas, probabilidad_estimada: prob };
+  if (casa) fila.casa = casa;
+  const { error } = await supabaseClient.from("mi_combinada").insert(fila);
   if (error) {
     btn.disabled = false; btn.textContent = "Confirmar apuesta";
     const m = error.message || "";
@@ -512,6 +599,29 @@ async function confirmarApuesta(prob) {
   }
   cerrarSheet();
   await cargarDia(diaOffset); // recarga: ahora aparece confirmada y los botones quedan bloqueados
+}
+
+// ---------- Guia: como leer cada cosa ----------
+function abrirAyuda() {
+  const body = `<div class="blk guia">
+    <h4>Nivel (Confiable, Radar alto, En el radar)</h4>
+    <p>Dice qué tan seguido acertó el método en partidos parecidos. Mide acierto, no ganancia: un partido muy probable suele pagar poco.</p>
+    <h4>Filtro triple</h4>
+    <p>El partido cumple tres condiciones a la vez: probabilidad del modelo de 60% o más, histórico de su cuota de 60% o más y más de 3 goles esperados. Acierta cerca de 72%, pero con cuotas bajas (cerca de 1.4). En el backtest rindió 0%: sirve para ubicar partidos "seguros", no para encontrar ventaja.</p>
+    <h4>Valor vs mercado</h4>
+    <p>La probabilidad del modelo menos la que implica la cuota. En verde (positivo), el modelo cree más en el Over de lo que la cuota paga. En el backtest sin fuga de datos (3 años, 12 ligas), los picks con valor positivo rindieron +4.7% y los negativos entre -3% y -8%. Es lo que más separa un partido de otro. Es una hipótesis que esta app sigue midiendo en vivo.</p>
+    <h4>Los dos juntos</h4>
+    <p>Filtro triple y valor positivo: acierta cerca de 72% y rindió +6.6% (273 picks). Filtro triple sin valor: acierta igual, pero rindió -1.7%. Valor sin filtro triple: acierta cerca de 63% y rindió +6.8%, con más altibajos.</p>
+    <h4>Minigráficas y 6/6</h4>
+    <p>Muestran los goles de los últimos 6 partidos de cada equipo por rol. Son contexto. En el análisis de rachas no mostraron ventaja por sí solas.</p>
+    <h4>Combinada del método y combinada por valor</h4>
+    <p>La del método sale por goles esperados y cuota. La de valor es la pareja de cuota total entre 1.80 y 2.10, de ligas distintas, con mayor valor sumado. Las dos se guardan solas cada día y se miden aparte.</p>
+    <h4>Cómo armar tu combinada</h4>
+    <p>1. Busca cuota total entre 1.80 y 2.10. 2. Prefiere patas con valor positivo. 3. Entre esas, si puedes, las que además cumplen el filtro triple. 4. Pon la cuota real que te dé tu casa: si es más de 4% menor que la de referencia, la ventaja esperada desaparece. 5. Confirma solo cuando estés seguro: no se puede editar.</p>
+    <h4>Qué esperar</h4>
+    <p>Aun con valor positivo, la ventaja esperada es pequeña y habrá semanas perdiendo. No es una garantía: es una inclinación a tu favor que solo se ve con muchos picks.</p>
+  </div>`;
+  abrirSheet({ titulo: "Cómo leer esta pantalla", sub: "Qué significa cada número y cómo usarlo", body });
 }
 
 // ---------- Hoja de detalle del partido ----------
@@ -648,6 +758,7 @@ function bindAnalizar() {
 // ultimos 4 dias. La pantalla se refresca sola cada minuto mientras esta abierta en "Hoy".
 let datosResultadosPorDia = {};
 let combMetodoRes = {};
+let combValorRes = {};
 let miCombRes = {};
 let diaResultadoActivo = null;
 let resultadosTimer = null;
@@ -665,10 +776,11 @@ async function cargarResultados(silencioso) {
     builderSlot.innerHTML = "";
   }
   const desde = hoyISO(-4);
-  const [pk, cm, mc] = await Promise.all([
+  const [pk, cm, mc, cv] = await Promise.all([
     supabaseClient.from("picks").select("*").gte("fecha_partido", desde + "T00:00:00-05:00").lte("fecha_partido", hoy + "T23:59:59-05:00").order("fecha_partido", { ascending: true }),
     supabaseClient.from("combinada_dia").select("*").gte("fecha", desde),
     supabaseClient.from("mi_combinada").select("*").gte("fecha", desde),
+    supabaseClient.from("combinada_valor").select("*").gte("fecha", desde),
   ]);
   if (vistaActual !== "resultados") return;
   if (pk.error) {
@@ -684,6 +796,8 @@ async function cargarResultados(silencioso) {
   combMetodoRes = {}; miCombRes = {};
   (cm.data || []).forEach((c) => { if (!c.mensaje && c.picks) combMetodoRes[c.fecha] = c; });
   (mc.data || []).forEach((c) => { miCombRes[c.fecha] = c; });
+  combValorRes = {};
+  (cv.data || []).forEach((c) => { combValorRes[c.fecha] = c; });
   resultadosActualizado = new Date();
 
   // al entrar se abre "Hoy"; en un refresco silencioso se respeta el dia que el usuario eligio
@@ -746,15 +860,16 @@ function renderResultados() {
   const ac = ver.filter((p) => p.resultado === true).length;
 
   // combinadas del dia: metodo y mi criterio
-  const cm = combMetodoRes[d], mc = miCombRes[d];
-  const bloque = (nombre, patas, cuota) => {
+  const cm = combMetodoRes[d], mc = miCombRes[d], cvd = combValorRes[d];
+  const bloque = (nombre, patas, cuota, nota) => {
     const rs = patas.map((x) => resultadoPata(x.liga_id, x.partido, d));
-    return `<div class="legs resumen"><b style="font-weight:600">${nombre}</b><span>cuota ${fmt(cuota, 2)} ${tagCombinada(rs)}</span></div>` +
+    return `<div class="legs resumen"><b style="font-weight:600">${nombre}</b><span>cuota ${fmt(cuota, 2)}${nota ? " " + nota : ""} ${tagCombinada(rs)}</span></div>` +
       patas.map((x, i) => `<div class="legs"><span>${esc(x.partido)}</span>${tagPata(rs[i])}</div>`).join("");
   };
   html += `<div class="sec"><h2>Combinadas del día</h2><span>${esc(etiquetaDiaLarga(d))}</span></div><div class="card">` +
     (cm ? bloque("Método", cm.picks || [], cm.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Método</b><span>sin combinada ese día</span></div>`) +
-    (mc ? bloque("Mi criterio", (mc.patas || []).map((x) => ({ liga_id: x.liga_id, partido: x.partido })), mc.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Mi criterio</b><span>sin apuesta confirmada</span></div>`) +
+    (cvd ? bloque("Por valor", cvd.picks || [], cvd.cuota_total) : `<div class="legs resumen"><b style="font-weight:600">Por valor</b><span>sin pareja de valor ese día</span></div>`) +
+    (mc ? bloque("Mi criterio", (mc.patas || []).map((x) => ({ liga_id: x.liga_id, partido: x.partido })), mc.cuota_real_total || mc.cuota_total, mc.cuota_real_total ? "(real)" : "") : `<div class="legs resumen"><b style="font-weight:600">Mi criterio</b><span>sin apuesta confirmada</span></div>`) +
     "</div>";
 
   const resumenTxt = esHoy
@@ -813,14 +928,15 @@ async function traerTodos(construir) {
 async function cargarEstadisticas() {
   builderSlot.innerHTML = "";
   vistaEl.innerHTML = titulo("Estadísticas", "Cargando...", false) + '<div class="cargando">Cargando...</div>';
-  const [pk, cm, mc] = await Promise.all([
-    traerTodos(() => supabaseClient.from("picks").select("id, liga_id, liga_nombre, partido, nivel, resultado, fecha_partido, probabilidad, cuota, cumple_filtro_triple, goles_local_final, goles_visita_final").not("resultado", "is", null).order("fecha_partido", { ascending: true })),
+  const [pk, cm, mc, cv] = await Promise.all([
+    traerTodos(() => supabaseClient.from("picks").select("id, liga_id, liga_nombre, partido, nivel, resultado, fecha_partido, probabilidad, cuota, valor_vs_mercado, cumple_filtro_triple, goles_local_final, goles_visita_final").not("resultado", "is", null).order("fecha_partido", { ascending: true })),
     supabaseClient.from("combinada_resultados").select("fecha, resultado_combinada, cuota_total"),
-    supabaseClient.from("mi_combinada_resultados").select("fecha, resultado_combinada, cuota_total, confirmada_en"),
+    supabaseClient.from("mi_combinada_resultados").select("fecha, resultado_combinada, cuota_total, confirmada_en, cuota_real_total, casa"),
+    supabaseClient.from("combinada_valor_resultados").select("fecha, resultado_combinada, cuota_total"),
   ]);
   if (vistaActual !== "stats") return;
   if (pk.error) { vistaEl.innerHTML = titulo("Estadísticas", "", false) + `<div class="vacio">Error: ${esc(pk.error.message)}</div>`; return; }
-  statsData = { picks: (pk.data || []).filter(esSenal), metodo: cm.error ? [] : cm.data || [], mias: mc.error ? [] : mc.data || [] };
+  statsData = { picks: (pk.data || []).filter(esSenal), metodo: cm.error ? [] : cm.data || [], mias: mc.error ? [] : mc.data || [], valor: cv.error ? [] : cv.data || [] };
   renderEstadisticas();
 }
 
@@ -829,7 +945,7 @@ function picksFiltrados() { return statsData.picks.filter((p) => aplicaFiltro(fe
 
 function unidadesComb(filas) {
   const ver = filas.filter((f) => f.resultado_combinada !== "PENDIENTE");
-  const u = ver.reduce((s, f) => s + (f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_total) - 1 : -1), 0);
+  const u = ver.reduce((s, f) => s + (f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_real_total || f.cuota_total) - 1 : -1), 0);
   return { ver: ver.length, u, roi: ver.length ? (100 * u) / ver.length : null, ganadas: ver.filter((f) => f.resultado_combinada === "GANO_COMPLETA").length };
 }
 
@@ -837,7 +953,7 @@ function seriesAcumuladas(filas, fechas) {
   // rendimiento acumulado (en unidades) de las combinadas ya verificadas, una por dia
   const ver = filas.filter((f) => f.resultado_combinada !== "PENDIENTE").sort((a, b) => a.fecha.localeCompare(b.fecha));
   let acum = 0;
-  return ver.map((f) => { acum += f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_total) - 1 : -1; return { x: fechas.indexOf(f.fecha), y: acum }; });
+  return ver.map((f) => { acum += f.resultado_combinada === "GANO_COMPLETA" ? Number(f.cuota_real_total || f.cuota_total) - 1 : -1; return { x: fechas.indexOf(f.fecha), y: acum }; });
 }
 
 function renderEstadisticas() {
@@ -860,31 +976,54 @@ function renderEstadisticas() {
     <div class="g3"><div><small>Acierto</small><b>${fmt(gen.pct)}%</b></div><div><small>Rendimiento</small><b class="${claseSigno(roiG)}">${signo(roiG)}%</b></div><div><small>Cuota prom.</small><b>${fmt(cuotaProm(todosPicks), 2)}</b></div></div>
     <p class="note note-pad">${gen.aciertos} de ${gen.total} picks acertados. Rendimiento: ${signo(unidades(todosPicks), 2)} unidades apostando 1 a cada pick.</p>`;
 
-  // ---------- Mi criterio contra el metodo ----------
+  // ---------- Metodo, combinada por valor y mi criterio ----------
   const mias = statsData.mias.filter((f) => aplicaFiltro(f.fecha));
   const diasMios = new Set(mias.map((f) => f.fecha));
   let metodo = statsData.metodo.filter((f) => aplicaFiltro(f.fecha));
-  if (mias.length) metodo = metodo.filter((f) => diasMios.has(f.fecha)); // solo los dias en que existen las dos
-  const uM = unidadesComb(metodo), uY = unidadesComb(mias);
+  let valorC = statsData.valor.filter((f) => aplicaFiltro(f.fecha));
+  if (mias.length) { metodo = metodo.filter((f) => diasMios.has(f.fecha)); valorC = valorC.filter((f) => diasMios.has(f.fecha)); } // solo los dias en que existen las tres
+  const uM = unidadesComb(metodo), uY = unidadesComb(mias), uV = unidadesComb(valorC);
   const enDias = todosPicks.filter((p) => diasMios.has(fechaColombia(p.fecha_partido)));
   const lista = resumen(enDias);
-  html += `<div class="sec"><h2>Mi criterio contra el método</h2><span>combinadas de 2 patas</span></div>`;
-  if (uY.ver >= 2) {
-    const fechas = [...new Set(metodo.concat(mias).filter((f) => f.resultado_combinada !== "PENDIENTE").map((f) => f.fecha))].sort();
+  html += `<div class="sec"><h2>Método, valor y mi criterio</h2><span>combinadas de 2 patas</span></div>`;
+  if (Math.max(uM.ver, uV.ver, uY.ver) >= 2) {
+    const fechas = [...new Set(metodo.concat(mias, valorC).filter((f) => f.resultado_combinada !== "PENDIENTE").map((f) => f.fecha))].sort();
     html += `<div class="chart-wrap">${graficaLineas([
       { name: "Método", color: C.gris, pts: seriesAcumuladas(metodo, fechas) },
-      { name: "Mi criterio", color: C.tinta, pts: seriesAcumuladas(mias, fechas) },
+      { name: "Por valor", color: C.apagado, dash: "5 3", pts: seriesAcumuladas(valorC, fechas) },
+      { name: "Mi criterio", color: C.tinta, w: 2.5, pts: seriesAcumuladas(mias, fechas) },
     ], fechas.length, { xl: fechas.length > 1 ? [[0, fechaMini(fechas[0])], [fechas.length - 1, fechaMini(fechas[fechas.length - 1])]] : [] })}</div>
-    <div class="lleg"><span><b style="color:${C.tinta}">Mi criterio</b></span><span><b style="color:${C.gris}">Método</b></span><span>Unidades acumuladas</span></div>`;
+    <div class="lleg">
+      <span><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="${C.tinta}" stroke-width="2.5"/></svg> Mi criterio</span>
+      <span><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="${C.apagado}" stroke-width="2" stroke-dasharray="5 3"/></svg> Por valor</span>
+      <span><svg width="22" height="8" aria-hidden="true"><line x1="0" y1="4" x2="22" y2="4" stroke="${C.gris}" stroke-width="2"/></svg> Método</span></div>
+    <p class="ill" style="padding-top:2px">Unidades acumuladas apostando 1 a cada combinada ya verificada.</p>`;
   } else {
-    html += `<div class="vacio">${mias.length ? "Hace falta al menos 2 combinadas verificadas para dibujar la gráfica." : "Sin apuestas confirmadas todavía."}<br>Cuando confirmes tus combinadas, aquí aparece la gráfica de rendimiento acumulado.</div>`;
+    html += `<div class="vacio">Hace falta al menos 2 combinadas verificadas para dibujar la gráfica.${mias.length ? "" : "<br>Cuando confirmes tus combinadas, tu línea aparece junto a las otras dos."}</div>`;
   }
-  const fila = (n, ncomb, ganadas, roi, tot) => `<div class="tb c4c"><b style="font-weight:600">${n}</b><span class="r n">${ncomb}</span><span class="r">${ganadas}</span><span class="r ${claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  const fila = (n, ncomb, ganadas, roi) => `<div class="tb c4c"><b style="font-weight:600">${n}</b><span class="r n">${ncomb}</span><span class="r">${ganadas}</span><span class="r ${claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  const mism = mias.length ? " (mismos días)" : "";
   html += `<div style="padding-top:12px"><div class="tb h c4c"><span></span><span class="r">Combinadas</span><span class="r">Ganadas</span><span class="r">Rendim.</span></div>
-    ${fila("Método" + (mias.length ? " (mismos días)" : ""), metodo.length, uM.ver ? uM.ganadas : "--", uM.roi)}
+    ${fila("Método" + mism, metodo.length, uM.ver ? uM.ganadas : "--", uM.roi)}
+    ${fila("Por valor" + mism, valorC.length, uV.ver ? uV.ganadas : "--", uV.roi)}
     ${fila("Mi criterio", mias.length, uY.ver ? uY.ganadas : "--", uY.roi)}
     <div class="tb c4c"><span>Promedio de la lista</span><span class="r n">${mias.length ? enDias.length + " picks" : "--"}</span><span class="r n">${mias.length ? fmt(lista.pct) + "%" : "--"}</span><span class="r n">--</span></div></div>
-    <p class="note note-pad">Combinadas y rendimiento cuentan solo las ya verificadas. El promedio de la lista es el acierto por pata de todos los picks del método en esos días: sirve para saber si escoger tú aporta algo sobre escoger al azar dentro de lo que el método ya filtró.</p>`;
+    <p class="note note-pad">Combinadas y rendimiento cuentan solo las ya verificadas. Mi criterio usa la cuota real que pusiste al confirmar (si la dejaste vacía, la de referencia). El promedio de la lista es el acierto por pata de todos los picks del método en esos días: sirve para saber si escoger tú aporta algo sobre escoger al azar dentro de lo que el método ya filtró.</p>`;
+
+  // ---------- Valor vs mercado, en vivo ----------
+  const conV = todosPicks.filter((p) => p.valor_vs_mercado !== null && p.valor_vs_mercado !== undefined);
+  html += `<div class="sec"><h2>Valor vs mercado</h2><span>${conV.length} picks con dato</span></div>
+    <div class="tb h c5v"><span>Grupo</span><span class="r">Picks</span><span class="r">Acierto</span><span class="r">Ventaja</span><span class="r">Rend.</span></div>`;
+  const gruposV = [
+    ["Valor > 0", (p) => esValorPositivo(p)], ["Valor ≤ 0", (p) => !esValorPositivo(p)],
+    ["Triple y valor > 0", (p) => p.cumple_filtro_triple === true && esValorPositivo(p)], ["Triple y valor ≤ 0", (p) => p.cumple_filtro_triple === true && !esValorPositivo(p)],
+    ["Sin triple y valor > 0", (p) => p.cumple_filtro_triple === false && esValorPositivo(p)], ["Sin triple y valor ≤ 0", (p) => p.cumple_filtro_triple === false && !esValorPositivo(p)],
+  ];
+  gruposV.forEach(([n, f], i) => {
+    const g = conV.filter(f), r = resumen(g), roi = rendimiento(g), v = ventajaPP(g), chica = g.length < MIN_PICKS_LIGA;
+    html += `<div class="tb c5v${chica ? " mut" : ""}${i === 2 ? " sep" : ""}"><span>${n}</span><span class="r n">${g.length}</span><span class="r">${r.pct === null ? "--" : fmt(r.pct) + "%"}</span><span class="r ${chica ? "" : claseSigno(v)}">${v === null ? "--" : signo(v) + " pp"}</span><span class="r ${chica ? "" : claseSigno(roi)}">${roi === null ? "--" : signo(roi) + "%"}</span></div>`;
+  });
+  html += `<p class="note note-pad" style="margin-top:10px">Ventaja: acierto menos la probabilidad que implica la cuota. Si es positiva, el grupo acierta más de lo que la cuota exige. Referencia del backtest sin fuga de datos (3 años, 12 ligas): valor > 0 rindió +4.7% con 1.075 picks; valor ≤ 0, entre -3% y -8%. Aquí la muestra en vivo todavía es chica: gris es menos de ${MIN_PICKS_LIGA} picks.</p>`;
 
   // ---------- Rendimiento por cuota ----------
   const rangos = [["Menos de 1.30", 0, 1.3], ["1.30 a 1.40", 1.3, 1.4], ["1.40 a 1.50", 1.4, 1.5], ["1.50 a 1.70", 1.5, 1.7], ["1.70 o más", 1.7, 99]];
@@ -967,14 +1106,15 @@ function renderEstadisticas() {
       <div class="leyenda"><span>${gan} ganadas</span><span>${fal} falladas</span><span>${pen} pendientes</span></div>`;
   } else html += '<div class="vacio">Sin combinadas del método con este filtro todavía.</div>';
 
-  // ---------- Filtro triple ----------
+  // ---------- Filtro triple (se conserva como referencia) ----------
   const conF = todosPicks.filter((p) => p.cumple_filtro_triple === true || p.cumple_filtro_triple === false);
-  const cu = resumen(conF.filter((p) => p.cumple_filtro_triple === true)), nc = resumen(conF.filter((p) => p.cumple_filtro_triple === false));
+  const gC = conF.filter((p) => p.cumple_filtro_triple === true), gN = conF.filter((p) => p.cumple_filtro_triple === false);
+  const cu = resumen(gC), nc = resumen(gN);
+  const celda = (g, r) => r.total ? `<strong>${fmt(r.pct)}%</strong><em>${r.aciertos}/${r.total} picks, cuota ${fmt(cuotaProm(g), 2)}</em><em class="${claseSigno(ventajaPP(g))}">Ventaja ${signo(ventajaPP(g))} pp, rend. ${signo(rendimiento(g))}%</em>` : `<strong>--%</strong><em>0 picks verificados</em>`;
   html += `<div class="sec"><h2>Filtro triple</h2><span>${conF.length} picks con dato</span></div>
-    <div class="two"><div><small>Cumple el filtro</small><strong>${cu.total ? fmt(cu.pct) + "%" : "--"}</strong><em>${cu.total ? cu.aciertos + "/" + cu.total + " picks" : "0 picks verificados"}</em></div>
-    <div><small>No lo cumple</small><strong>${nc.total ? fmt(nc.pct) + "%" : "--"}</strong><em>${nc.total ? nc.aciertos + "/" + nc.total + " picks" : "0 picks verificados"}</em></div></div>`;
-  if (cu.total < MIN_MUESTRA_SOLIDA || nc.total < MIN_MUESTRA_SOLIDA) html += `<div style="padding:10px 20px 0"><span class="tag t-triple">Muestra chica, no concluyente</span><p class="note">Se considera sólida desde ${MIN_MUESTRA_SOLIDA} picks verificados en cada grupo. Backtest inicial: 71.4% contra 61.7%.</p></div>`;
-  else html += `<p class="note note-pad">Backtest inicial: 71.4% contra 61.7%.</p>`;
+    <div class="two"><div><small>Cumple el filtro</small>${celda(gC, cu)}</div><div><small>No lo cumple</small>${celda(gN, nc)}</div></div>`;
+  if (cu.total < MIN_MUESTRA_SOLIDA || nc.total < MIN_MUESTRA_SOLIDA) html += `<div style="padding:10px 20px 0"><span class="tag t-triple">Muestra chica, no concluyente</span><p class="note">Se considera sólida desde ${MIN_MUESTRA_SOLIDA} picks verificados en cada grupo.</p></div>`;
+  html += `<p class="note note-pad">Backtest sin fuga de datos (3 años, 12 ligas, 1.317 picks): acertó 72.1% con un rendimiento de 0.0%. Acierta mucho, pero su cuota ya lo descuenta: sirve para distinguir partidos "seguros", y su efecto es más claro cuando además hay valor positivo.</p>`;
 
   html += `<div class="foot">Análisis pre-partido. No garantiza resultados.<br>Diseñado y creado por Jose Torres.</div>`;
   vistaEl.innerHTML = html;
