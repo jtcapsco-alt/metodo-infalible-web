@@ -305,3 +305,7 @@ svg text { font-family: var(--fuente); }
 .res-eq { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
 .res-eq b { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20px; }
 .team-blk .cab .quien b { font-size: 15px; font-weight: 600; }
+
+/* ---------- Etapa 5: boton Analizar ahora cuando el dia ya esta analizado ---------- */
+.btn-s.hecho { background: var(--superficie); color: var(--apagado); border: 1px solid var(--linea); opacity: 1; cursor: default; }
+.estado-analisis { line-height: 18px; }

@@ -346,14 +346,15 @@ async function cargarDia(off) {
   seleccion = [];
   builderSlot.innerHTML = "";
   const fecha = hoyISO(off);
-  vistaEl.innerHTML = titulo(off === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true) + '<div class="cargando">Cargando...</div>';
+  vistaEl.innerHTML = titulo(off === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true, { cargando: true }) + '<div class="cargando">Cargando...</div>';
   bindAnalizar();
 
-  const [pk, cm, mc, cv] = await Promise.all([
+  const [pk, cm, mc, cv, an] = await Promise.all([
     supabaseClient.from("picks").select("*").gte("fecha_partido", fecha + "T00:00:00-05:00").lte("fecha_partido", fecha + "T23:59:59-05:00").order("fecha_partido", { ascending: true }),
     supabaseClient.from("combinada_dia").select("*").eq("fecha", fecha).maybeSingle(),
     supabaseClient.from("mi_combinada").select("*").eq("fecha", fecha).maybeSingle(),
     supabaseClient.from("combinada_valor").select("*").eq("fecha", fecha).maybeSingle(),
+    supabaseClient.from("analisis_corridas").select("*").gte("ejecutado_en", hoyISO(-1) + "T21:00:00-05:00").order("ejecutado_en", { ascending: false }).limit(10),
   ]);
   if (vistaActual !== (off === 0 ? "hoy" : "manana")) return; // el usuario ya cambio de pantalla
   if (pk.error) {
@@ -365,11 +366,60 @@ async function cargarDia(off) {
   combMetodoDia = !cm.error && cm.data && !cm.data.mensaje ? cm.data : null;
   miCombDia = !mc.error && mc.data ? mc.data : null;
   combValorDia = !cv.error && cv.data ? cv.data : null;
+  estadoAnalisis = calcularEstadoAnalisis(an.error ? null : an.data || [], fecha);
   renderDia();
 }
 
-function titulo(t, sub, conAnalizar) {
-  return `<div class="ttl"><div><h1>${esc(t)}</h1><p>${esc(sub)}</p></div>${conAnalizar ? '<button class="btn-s" id="btn-analizar">Analizar ahora</button>' : ""}</div>${conAnalizar ? '<p class="estado-analisis" id="analizar-mensaje"></p>' : ""}`;
+function titulo(t, sub, conAnalizar, estado) {
+  estado = estado || {};
+  let boton = "";
+  if (conAnalizar) {
+    if (estado.cargando) boton = '<button class="btn-s" id="btn-analizar" disabled>Analizar ahora</button>';
+    else if (estado.hecho) boton = '<button class="btn-s hecho" id="btn-analizar" disabled aria-label="El análisis de este día ya se ejecutó">Análisis listo</button>';
+    else boton = '<button class="btn-s" id="btn-analizar">Analizar ahora</button>';
+  }
+  return `<div class="ttl"><div><h1>${esc(t)}</h1><p>${esc(sub)}</p></div>${boton}</div>${conAnalizar ? `<p class="estado-analisis" id="analizar-mensaje">${esc(estado.mensaje || "")}</p>` : ""}`;
+}
+
+// ---------- Estado del analisis: ¿ya se corrio el de este dia? ----------
+// Cada corrida del motor (automatica o manual) deja una fila en analisis_corridas, incluso si no encontro
+// partidos. Una corrida COMPLETA (ninguna liga fallo) vale para todos los dias que cubre, desde que
+// corrio hasta que llega la siguiente: la de las 9 p. m. cuenta ya para el dia siguiente.
+let estadoAnalisis = null;
+function pl(n, uno, varios) { return n === 1 ? uno : varios; }
+
+function calcularEstadoAnalisis(filas, fechaT) {
+  if (filas === null) return { disponible: false };   // la tabla aun no existe: se comporta como antes
+  const vigente = filas.find((f) => f.completa === true && (f.dias_cubiertos || []).some((d) => d.fecha === fechaT)) || null;
+  const dia = vigente ? vigente.dias_cubiertos.find((d) => d.fecha === fechaT) : null;
+  return { disponible: true, vigente, dia, ultima: filas[0] || null };
+}
+
+function estadoBoton() {
+  const an = estadoAnalisis, cuando = diaOffset === 0 ? "hoy" : "mañana";
+  if (!an || !an.disponible) return {};
+  if (an.vigente) {
+    const v = an.vigente, d = an.dia, quien = v.origen === "automatico" ? "automático" : "manual";
+    let m = `Análisis de ${cuando} ya ejecutado a las ${horaCol(v.ejecutado_en)} (${quien}).`;
+    if (d) m += ` Encontró ${d.partidos} ${pl(d.partidos, "partido programado", "partidos programados")}, ${d.con_senal} con señal.`;
+    return { hecho: true, mensaje: m };
+  }
+  if (an.ultima && an.ultima.completa === false) {
+    const n = (an.ultima.ligas_con_error || []).length;
+    return { mensaje: `El último análisis (${horaCol(an.ultima.ejecutado_en)}) tuvo problemas ${n ? `en ${n} ${pl(n, "liga", "ligas")}` : "al guardar"}. Puedes lanzarlo de nuevo.` };
+  }
+  return { mensaje: `Todavía no se ha corrido el análisis de ${cuando}. Corre solo a las 9 p. m. y a las 6 a. m., o lánzalo ahora.` };
+}
+
+function mensajeSinPicks() {
+  const an = estadoAnalisis, cuando = diaOffset === 0 ? "hoy" : "mañana";
+  const generico = 'Todavía no hay partidos con señal para este día. El análisis corre cada noche y puedes lanzarlo con "Analizar ahora".';
+  if (!an || !an.disponible || !an.vigente) return generico;
+  const h = horaCol(an.vigente.ejecutado_en), d = an.dia;
+  if (!d) return `El análisis ya corrió a las ${h} y no encontró partidos con señal ${cuando}.`;
+  if (d.partidos === 0) return `El análisis ya corrió a las ${h} y no hay partidos programados ${cuando} en ninguna de tus ligas (por ejemplo, por fecha FIFA o descanso). No hace falta volver a analizar.`;
+  if (d.con_cuota === 0) return `El análisis ya corrió a las ${h}: hay ${d.partidos} ${pl(d.partidos, "partido programado", "partidos programados")} ${cuando}, pero ninguno trae todavía la cuota Over 2.5, así que no se pueden evaluar. Se vuelve a intentar en el próximo análisis.`;
+  return `El análisis ya corrió a las ${h}: hay ${d.partidos} ${pl(d.partidos, "partido programado", "partidos programados")} ${cuando} y ${d.con_cuota} con cuota, pero ninguno con señal del método.`;
 }
 
 function yaEmpezo(p) { return new Date(p.fecha_partido).getTime() <= Date.now(); }
@@ -390,10 +440,10 @@ function renderDia() {
   const fecha = hoyISO(diaOffset);
   const nTriple = picksDia.filter((p) => p.cumple_filtro_triple === true).length;
   const nValor = picksDia.filter(esValorPositivo).length;
-  let html = titulo(diaOffset === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true);
+  let html = titulo(diaOffset === 0 ? "Hoy" : "Mañana", etiquetaDiaLarga(fecha), true, estadoBoton());
 
   if (picksDia.length === 0) {
-    html += `<div class="vacio">Todavía no hay partidos con señal para este día. El análisis corre cada noche y puedes lanzarlo con "Analizar ahora".</div>`;
+    html += `<div class="vacio">${esc(mensajeSinPicks())}</div>`;
     vistaEl.innerHTML = html;
     bindAnalizar();
     renderBuilder();
@@ -753,8 +803,11 @@ function bindAnalizar() {
     msg.textContent = "Análisis en curso. La pantalla se actualiza sola cuando termine.";
     pollingAnalisis = setInterval(async () => {
       intentos++;
-      const { data: nuevos } = await supabaseClient.from("picks").select("id").gt("actualizado_en", momentoClick).limit(1);
-      const yaTermino = nuevos && nuevos.length > 0;
+      // la corrida nueva deja su fila en analisis_corridas (incluso si no encontro partidos)
+      const { data: cor, error: errCor } = await supabaseClient.from("analisis_corridas").select("id").gt("ejecutado_en", momentoClick).limit(1);
+      let yaTermino;
+      if (!errCor) yaTermino = !!(cor && cor.length > 0);
+      else { const { data: nuevos } = await supabaseClient.from("picks").select("id").gt("actualizado_en", momentoClick).limit(1); yaTermino = !!(nuevos && nuevos.length > 0); }
       const b2 = $("btn-analizar"), m2 = $("analizar-mensaje");
       if (yaTermino || intentos >= maxIntentos) {
         clearInterval(pollingAnalisis); pollingAnalisis = null;
@@ -762,7 +815,10 @@ function bindAnalizar() {
         if (vistaActual === "hoy" || vistaActual === "manana") {
           await cargarDia(diaOffset);
           const m3 = $("analizar-mensaje");
-          if (m3) m3.textContent = yaTermino ? "Listo. Partidos actualizados." : "Sigue tardando más de lo normal. Entra en un rato y vuelve a revisar.";
+          if (m3) {
+            if (!yaTermino) m3.textContent = "Sigue tardando más de lo normal. Entra en un rato y vuelve a revisar.";
+            else if (!(estadoAnalisis && estadoAnalisis.disponible)) m3.textContent = "Listo. Partidos actualizados.";
+          }
         }
       } else if (m2) {
         m2.textContent = `Analizando... (${intentos}/${maxIntentos})`;
