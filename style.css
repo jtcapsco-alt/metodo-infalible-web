@@ -309,3 +309,60 @@ svg text { font-family: var(--fuente); }
 /* ---------- Etapa 5: boton Analizar ahora cuando el dia ya esta analizado ---------- */
 .btn-s.hecho { background: var(--superficie); color: var(--apagado); border: 1px solid var(--linea); opacity: 1; cursor: default; }
 .estado-analisis { line-height: 18px; }
+
+/* =====================================================================
+   Etapa 6: la app se adapta al tamano de la pantalla
+   - Celular (menos de 640 px): IGUAL que antes, una columna de 480 px como maximo.
+   - Tablet vertical (640 px o mas): usa todo el ancho (hasta 900 px), las tarjetas de
+     partidos van en columnas y las combinadas en fila.
+   - Estadisticas en 2 columnas desde 700 px.
+   - Tablet horizontal / pantalla grande (900 px o mas): hasta 1100, 1240 y 1360 px;
+     desde unos 1100 px caben 3 columnas de tarjetas.
+   ===================================================================== */
+:root { --ancho-app: 480px; }
+.app { max-width: var(--ancho-app); }
+
+/* contenedores que en celular no cambian nada */
+.combos, .cards-grid, .bloques { display: block; }
+.bloque { break-inside: avoid; -webkit-column-break-inside: avoid; page-break-inside: avoid; }
+
+/* las graficas se ajustan al ancho de su recuadro, sin crecer de mas */
+.chart-wrap svg, .team-blk > svg { width: 100%; max-width: 520px; height: auto; }
+
+@media (min-width: 640px) {
+  :root { --ancho-app: 900px; }
+
+  /* combinadas (metodo, valor, mi combinada): en fila */
+  .combos { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; padding: 0 20px 6px; align-items: start; }
+  .combos .card { margin: 0; }
+
+  /* tarjetas de partidos: en columnas, como fichas con borde */
+  .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; padding: 12px 20px 8px; }
+  .cards-grid .match { border: 1px solid var(--linea); border-radius: 6px; }
+  .cards-grid .match.triple { border-color: var(--senal-borde); }
+
+  .seg { max-width: 460px; }
+
+  /* barra inferior, barra de Mi combinada y hojas: un poco mas anchas, siempre centradas */
+  .nav, .bld { max-width: 560px; }
+  .sheet { max-width: 720px; top: 40px; }
+  .sheet.corto { max-width: 560px; }
+  .login-box { max-width: 380px; }
+}
+
+@media (min-width: 700px) {
+  /* Estadisticas: las secciones se reparten en 2 columnas, sin partir ninguna a la mitad */
+  .bloques { display: block; column-count: 2; column-gap: 0; }
+}
+
+@media (min-width: 900px) {
+  :root { --ancho-app: 1100px; }   /* tablet horizontal (1024 px): usa todo el ancho */
+}
+
+@media (min-width: 1200px) {
+  :root { --ancho-app: 1240px; }
+}
+
+@media (min-width: 1500px) {
+  :root { --ancho-app: 1360px; }
+}

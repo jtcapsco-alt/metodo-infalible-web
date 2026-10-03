@@ -453,6 +453,8 @@ function renderDia() {
   html += `<div class="sec" style="padding-top:14px"><h2>${picksDia.length} partido${picksDia.length === 1 ? "" : "s"} con señal</h2><span>${nTriple} con filtro triple, ${nValor} con valor positivo</span></div>
     <div class="ayuda-fila"><button class="link-btn" data-ayuda="1">Cómo leer esta pantalla</button></div>`;
 
+  // --- combinadas (en pantalla ancha se acomodan en fila) ---
+  html += '<div class="combos">';
   // --- combinada del metodo ---
   if (combMetodoDia) {
     const patas = combMetodoDia.picks || [];
@@ -481,6 +483,7 @@ function renderDia() {
       ${patas.map((x) => `<div class="legs"><span>${esc(x.partido)}</span><b style="font-weight:600">${fmt(x.cuota, 2)}</b></div>`).join("")}
       <div class="legs resumen"><span>Cuota total${miCombDia.cuota_real_total ? " (real)" : ""}${miCombDia.casa ? ", " + esc(miCombDia.casa) : ""}</span><b style="font-weight:600">${fmt(miCombDia.cuota_real_total || miCombDia.cuota_total, 2)}</b></div></div>`;
   }
+  html += "</div>";
 
   // --- partidos: agrupados por liga, o todos ordenados por valor vs mercado ---
   html += `<div class="sec" style="padding-bottom:8px"><h2>Partidos</h2><span>${ordenDia === "valor" ? "de mayor a menor valor" : "agrupados por liga"}</span></div>
@@ -502,13 +505,16 @@ function renderDia() {
       </div>`;
   };
   if (ordenDia === "valor") {
+    html += '<div class="cards-grid">';
     picksDia.slice().sort((a, b) => (valorPP(b) === null ? -999 : valorPP(b)) - (valorPP(a) === null ? -999 : valorPP(a))).forEach((p) => { html += tarjeta(p, true); });
+    html += "</div>";
   } else {
     const porLiga = {};
     picksDia.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
     Object.keys(porLiga).sort().forEach((liga) => {
-      html += `<div class="band">${esc(liga)}</div>`;
+      html += `<div class="band">${esc(liga)}</div><div class="cards-grid">`;
       porLiga[liga].forEach((p) => { html += tarjeta(p, false); });
+      html += "</div>";
     });
   }
   html += `<div class="foot">Análisis pre-partido. No garantiza resultados. La gestión de la banca es tu responsabilidad.<br>Diseñado y creado por Jose Torres.</div>`;
@@ -958,7 +964,7 @@ function renderResultados() {
   const porLiga = {};
   picks.forEach((p) => { (porLiga[p.liga_nombre] = porLiga[p.liga_nombre] || []).push(p); });
   Object.keys(porLiga).sort().forEach((liga) => {
-    html += `<div class="band">${esc(liga)}</div>`;
+    html += `<div class="band">${esc(liga)}</div><div class="cards-grid">`;
     porLiga[liga].forEach((p) => {
       const triple = p.cumple_filtro_triple === true;
       const [loc, vis] = equipos(p);
@@ -974,6 +980,7 @@ function renderResultados() {
           ${pendiente ? `<div>Estado</div><div class="r">${porJugar ? "Empieza " + horaCol(p.fecha_partido) : "Esperando resultado"}</div>` : `<div>Goles totales</div><div class="r">${tiene ? p.goles_local_final + p.goles_visita_final : "--"}</div>`}</div>
       </div>`;
     });
+    html += "</div>";
   });
   html += `<div class="foot">Solo se muestran partidos con señal. Un resultado aislado no cambia las reglas: se evalúa el acumulado.</div>`;
   vistaEl.innerHTML = html;
@@ -1190,8 +1197,18 @@ function renderEstadisticas() {
   if (cu.total < MIN_MUESTRA_SOLIDA || nc.total < MIN_MUESTRA_SOLIDA) html += `<div style="padding:10px 20px 0"><span class="tag t-triple">Muestra chica, no concluyente</span><p class="note">Se considera sólida desde ${MIN_MUESTRA_SOLIDA} picks verificados en cada grupo.</p></div>`;
   html += `<p class="note note-pad">Backtest sin fuga de datos (3 años, 12 ligas, 1.317 picks): acertó 72.1% con un rendimiento de 0.0%. Acierta mucho, pero su cuota ya lo descuenta: sirve para distinguir partidos "seguros", y su efecto es más claro cuando además hay valor positivo.</p>`;
 
-  html += `<div class="foot">Análisis pre-partido. No garantiza resultados.<br>Diseñado y creado por Jose Torres.</div>`;
-  vistaEl.innerHTML = html;
+  const pie = `<div class="foot">Análisis pre-partido. No garantiza resultados.<br>Diseñado y creado por Jose Torres.</div>`;
+  vistaEl.innerHTML = envolverBloques(html) + pie;
+}
+
+// Cada seccion de Estadisticas (la que empieza con un encabezado .sec) pasa a ser un bloque
+// que no se parte entre columnas. En celular se ve igual (una columna); en pantalla ancha
+// se reparten en dos columnas.
+function envolverBloques(html) {
+  const partes = html.split('<div class="sec"');
+  const cabecera = partes.shift();
+  if (!partes.length) return html;
+  return cabecera + '<div class="bloques">' + partes.map((p) => `<section class="bloque"><div class="sec"${p}</section>`).join("") + "</div>";
 }
 
 // ---------- Hoja de liga ----------
